@@ -3,11 +3,13 @@
 // 曲数分の import を並べ、TRACKS と同じ順に export する。
 import img01 from './assets/img/track01.jpg';
 import img02 from './assets/img/track02.jpg';
+import img03 from './assets/img/track03.jpg';
 import audio01 from './assets/audio/track01.mp4';
 import audio02 from './assets/audio/track02.mp4';
+import audio03 from './assets/audio/track03.mp4';
 
 /** 曲ごとのジャケット画像（TRACKS と同じ順） */
-export const TRACK_IMG: string[] = [img01, img02];
+export const TRACK_IMG: string[] = [img01, img02, img03];
 
 /** 曲ごとの音源（TRACKS と同じ順） */
-export const TRACK_AUDIO: string[] = [audio01, audio02];
+export const TRACK_AUDIO: string[] = [audio01, audio02, audio03];
