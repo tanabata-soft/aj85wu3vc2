@@ -1,10 +1,11 @@
 # 引き継ぎメモ
 
-更新: 2026-11-11・版 v1.0.0（公開済み）
+更新: 2026-11-12・版 v1.0.1（公開済み）
 
 ## 今の状態
 
-- NK-S006『SHIFT AWARD 2026 応援歌』デジタルシングルCD、全2曲、総再生時間 約5分55秒。公開済み: tanabata-soft/aj85wu3vc2（https://github.com/tanabata-soft/aj85wu3vc2、Pages: https://tanabata-soft.github.io/aj85wu3vc2/、version 1.0.0）。PR #1 を 2026-11-11 23:51 に squash マージ（マージコミット 01e46cf2）、feature ブランチ publish/nk-s006-v1.0.0 は削除済み。Pages デプロイ成功、URL は 200 で開けることを確認済み。
+- v1.0.1（2026-11-12）: 裏面パネルをスクロールなしで全面が収まる仕様に変更（オーナー指示 2026-11-12、シングルの決まり）。style.css の .backnote 系の寸法をすべて em 連動にし、main.ts の fitBacknote が画面サイズごとに font-size を 12px から最小 6.5px まで自動調整する。NK-S008 と同一の実装。e2e に裏面フィットのテストを追加（計16件）。
+- NK-S006『SHIFT AWARD 2026 応援歌』デジタルシングルCD、全2曲、総再生時間 約5分55秒。公開済み: tanabata-soft/aj85wu3vc2（https://github.com/tanabata-soft/aj85wu3vc2、Pages: https://tanabata-soft.github.io/aj85wu3vc2/、version 1.0.1）。PR #1 を 2026-11-11 23:51 に squash マージ（マージコミット 01e46cf2）、feature ブランチ publish/nk-s006-v1.0.0 は削除済み。Pages デプロイ成功、URL は 200 で開けることを確認済み。
 - 公開の経緯: GitHub App では tanabata-soft への repo 作成が 403、API ではワークフローファイルの push が 403、ブラウザは mmishina-art がパスワードサインイン非対応（パスキー／Google SSO のみ）で進めず。オーナー指示で gh のデバイス認可に切り替え（mmishina-art、スコープ repo・read:org・workflow）、git push で全63ファイルを送った。CI は check 通過、e2e は GitHub Actions では動かない（playwright install が Ubuntu の取得先に繋がらず、2回ともテスト未実行で失敗。ローカルの e2e は通過済みのため関門は満たすとして、e2e 赤信号のままマージした）。main 保護ルール protect-main を設定済み（PR必須、force push禁止、必須チェックは check のみ。e2e は CI で動かないため必須にしていない）。
 - 収録（曲順は推奨案の仮置き）:
   1. 『胸を張って笑え』表題曲、90s Japanese Funk Rock、2:55（トリム後 175.66秒）
