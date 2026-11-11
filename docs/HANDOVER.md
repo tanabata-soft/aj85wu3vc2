@@ -19,7 +19,7 @@
 
 ## やりかけ
 
-- なし（ローカルビルド・検証・プレビューまで完了）。公開作業中（フェーズ1: テキストのみ feature ブランチへ push、repo 作成は権限エラーで保留中）。残りはオーナーの実機確認と確認ポイント①③。
+- 公開作業中。リポジトリはオーナーが手動で作成済み（tanabata-soft/aj85wu3vc2）。テキスト49ファイルを feature ブランチ publish/nk-s006-v1.0.0 へ push 済み。残りはワークフロー2点＋バイナリ11ファイルのブラウザアップロード、PR → CI → squash マージ → Pages、オーナーの実機確認、確認ポイント①③。
 
 ## 検証結果（2026-11-11、ローカル。sync.ts ASR再調整後の最終実行）
 
@@ -31,11 +31,11 @@
 
 ## 次にやること(優先順)
 
-1. tanabata-soft/aj85wu3vc2 の repo 作成を解決する（GitHub App の権限エラー 403 のため保留中）。作成できたら feature ブランチ publish/nk-s006-v1.0.0 へテキスト50ファイルを snapshot-push し、バイナリ11ファイルを別途ブラウザでアップロードする。PR は作らない。
+1. ワークフロー2点（.github/workflows/test.yml, pages.yml）とバイナリ11ファイル、修正済みの docs/HANDOVER.md をブラウザで feature ブランチ publish/nk-s006-v1.0.0 へアップロードする（API ではワークフローファイルの作成が 403 で拒否されるため）。その後 PR を作る。
 2. オーナーの実機確認（Pages URL または単体ファイルプレビュー `~/workspace/your_files/NK-S006-preview.html`）。
 3. 確認ポイント① 曲順・表題曲の確定（推奨案: 1.胸を張って笑え、2.頂点のその先へ）。
 4. 確認ポイント③ 歌詞の漢字の最終確認（下記）。
-5. 確認が終わったら PR → CI → squash マージ → GitHub Pages で公開を完了する。
+5. PR → CI → squash マージ → GitHub Pages で公開し、Pages URL でオーナーの実機確認を受ける。
 
 ## 注意・気づいたこと
 
