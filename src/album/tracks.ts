@@ -1,0 +1,9 @@
+// 曲目と解説（この作品のデータ）。src は歌詞データ（src/album/sync.ts）のキー。
+// 並びが曲順。シングルでは1曲目が表題曲、2曲目がカップリング（docs/SINGLE.md）。
+// 曲順は推奨案の仮置き（確認ポイント①）。time はトリム後の実測（floor）。
+import type { TrackMeta } from '../logic';
+
+export const TRACKS: TrackMeta[] = [
+  { src: '胸を張って笑え', title: '胸を張って笑え', genre: '90s Japanese Funk Rock', time: '2:55', note: '90年代ファンク・ロックの応援歌。真っ黒な画面とにらめっこしてバグを探す、地味と言われた仕事を「世界を救う仕事だぜ」と胸を張る。品質と変革を掲げ、現場から「ド派手に行こうぜ」と笑い飛ばす、表題曲。' },
+  { src: '頂点のその先へ', title: '頂点のその先へ', genre: 'Corporate Hip-Hop', time: '2:59', note: 'コーポレート・ヒップホップの応援歌。テストの現場から始まったストーリーがITの頂点を掴み、「We keep the SHIFT!」と進化を止めない。名もなき技術者たちへの讃歌で締める、カップリング。' },
+];
