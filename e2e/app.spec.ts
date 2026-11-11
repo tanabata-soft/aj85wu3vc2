@@ -1,10 +1,13 @@
 import { expect, test } from '@playwright/test';
+import { SYNC } from '../src/album/sync';
+import { TRACKS } from '../src/album/tracks';
 
-// NK-S006『SHIFT AWARD 2026 応援歌』（シングル形態・2曲）に対する期待値。
+// NK-S006『SHIFT AWARD 2026 応援歌』（シングル形態・3曲、3曲目ボーナストラック）に対する期待値。
+// 歌詞行数: track1 39行＋間奏行1、track2 45行、track3 26行＋間奏行1。
 
 test('初回に全音源が一括ダウンロードされ、キャッシュに揃う', async ({ page }) => {
   await page.goto('/');
-  // 一括ダウンロードが終わると、音源キャッシュに2曲分が揃い、表示は消える
+  // 一括ダウンロードが終わると、音源キャッシュに3曲分が揃い、表示は消える
   await expect
     .poll(
       async () =>
@@ -14,7 +17,7 @@ test('初回に全音源が一括ダウンロードされ、キャッシュに�
         }),
       { timeout: 30_000 },
     )
-    .toBe(2);
+    .toBe(3);
   await expect(page.locator('#dl-banner')).toBeHidden();
   await expect(page.locator('body')).toHaveAttribute('data-downloading', '0');
 });
@@ -33,8 +36,11 @@ test('短冊ジャケットが開き、タップで裏面パネルに反転す�
   await expect(nb).toContainText('NK-S006');
   await expect(nb).toContainText('90s Japanese Funk Rock');
   await expect(nb).toContainText('Corporate Hip-Hop');
+  await expect(nb).toContainText('Contemporary J-R&B');
   await expect(nb).toContainText('2:55');
   await expect(nb).toContainText('2:59');
+  await expect(nb).toContainText('2:46');
+  await expect(nb).toContainText('BONUS');
   await expect(nb.locator('#version-line')).toContainText('デジタルシングルCD v');
   await page.locator('#flip').click();
   await expect(page.locator('#flip')).not.toHaveClass(/flipped/);
@@ -62,7 +68,7 @@ test('裏面パネルは小さい画面でもスクロールなしで全内容�
   }
 });
 
-test('再生ボタンから1曲目が始まり、「次」で2曲目に進む', async ({ page }) => {
+test('再生ボタンから1曲目が始まり、「次」で2曲目・3曲目（ボーナス）に進む', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '全曲再生' }).click();
   await expect(page.locator('#view-player')).toBeVisible();
@@ -73,6 +79,13 @@ test('再生ボタンから1曲目が始まり、「次」で2曲目に進む', 
   await page.getByRole('button', { name: '次の曲' }).click();
   await expect(page.locator('#p-title')).toContainText('頂点のその先へ');
   await expect(page.locator('body')).toHaveAttribute('data-track', '1');
+  await page.getByRole('button', { name: '次の曲' }).click();
+  await expect(page.locator('#p-title')).toContainText('きずだらけのまま');
+  await expect(page.locator('#p-title')).toContainText('（ボーナストラック）');
+  await expect(page.locator('body')).toHaveAttribute('data-track', '2');
+  // ボーナストラックの歌詞（26行）。冒頭の歌詞が11.58秒からのため、間奏「♪」が1行入る
+  expect(await page.locator('#lyrics-box p:not(.interlude)').count()).toBe(26);
+  expect(await page.locator('#lyrics-box p.interlude').count()).toBe(1);
 });
 
 test('再生中にトップへ戻っても曲は止まらず、トップの再生で再生中の曲の画面へ戻る', async ({ page }) => {
@@ -96,6 +109,55 @@ test('再生中にトップへ戻っても曲は止まらず、トップの再�
   await expect(page.locator('#p-title')).toContainText('頂点のその先へ');
   await expect(page.locator('body')).toHaveAttribute('data-track', '1');
   await expect(page.locator('body')).toHaveAttribute('data-playing', '1');
+});
+
+test('歌詞をタップすると、その行の時刻から再生が始まる', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '全曲再生' }).click();
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator('#play-lb')).toHaveText('一時停止', { timeout: 10_000 });
+  // 一時停止してから、1曲目の3行目をタップする: その行から再生が始まり、現在行になる
+  await page.getByRole('button', { name: '再生／一時停止' }).click();
+  await expect(page.locator('#play-lb')).toHaveText('再生');
+  const lines = SYNC[TRACKS[0].src] ?? [];
+  const t = lines[2][0];
+  const line = page.locator(`#lyrics-box p[data-t="${t}"]`);
+  await line.click();
+  await expect(page.locator('body')).toHaveAttribute('data-playing', '1');
+  const now = await page.evaluate(() => document.querySelector('audio')!.currentTime);
+  expect(now).toBeGreaterThanOrEqual(Math.max(0, t - 1));
+  expect(now).toBeLessThan(t + 30);
+  await expect(line).toHaveClass(/cur/);
+});
+
+test('歌詞をドラッグ（スクロール操作）してもシークしない', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '全曲再生' }).click();
+  await expect(page.locator('#view-player')).toBeVisible();
+  await expect(page.locator('#play-lb')).toHaveText('一時停止', { timeout: 10_000 });
+  // 一時停止した状態で、先の行（15秒以降）を押してドラッグする: シークも再生再開もしない
+  await page.getByRole('button', { name: '再生／一時停止' }).click();
+  await expect(page.locator('#play-lb')).toHaveText('再生');
+  const t = await page.evaluate(() => {
+    const ps = [...document.querySelectorAll('#lyrics-box p')];
+    const el = ps.find((p) => Number((p as HTMLElement).dataset.t ?? '0') >= 15);
+    return el ? Number((el as HTMLElement).dataset.t) : -1;
+  });
+  expect(t).toBeGreaterThanOrEqual(15);
+  const line = page.locator(`#lyrics-box p[data-t="${t}"]`);
+  await line.scrollIntoViewIfNeeded();
+  const bb = await line.boundingBox();
+  expect(bb).not.toBeNull();
+  if (!bb) return;
+  const cx = bb.x + bb.width / 2;
+  const cy = bb.y + bb.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy + 40, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('body')).toHaveAttribute('data-playing', '0');
+  const now = await page.evaluate(() => document.querySelector('audio')!.currentTime);
+  expect(now).toBeLessThan(t - 5);
 });
 
 test('再生と一時停止で表示が切り替わる', async ({ page }) => {
