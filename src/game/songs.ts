@@ -33,7 +33,10 @@ export const SONG_DEFS: GameSongDef[] = [
     audioUrl: audio01,
     jacketUrl: jacket01,
     accent: '#d67e51',
-    frameInset: 0,
+    // 紙枠あり（クリーム色・実測38px、四辺ほぼ均一）。当初は端の分散だけの
+    // 実測で 0 と誤判定した（枠に紙の質感があり分散が大きいため）。
+    // 2026-11-20 オーナー指摘で目視確認のうえ設定
+    frameInset: 38,
     album: 'NK-S006 SHIFT AWARD 2026 応援歌',
     genre: '90s Japanese Funk Rock',
   },
