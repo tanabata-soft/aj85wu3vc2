@@ -25,13 +25,14 @@ import {
   findNearestNote,
   hitYRatio,
   isComboShow,
-  isGameOver,
-  GAME_OVER_ACCURACY_FLOOR,
+  LIFE_MAX,
+  applyLifeDelta,
+  isLifeGameOver,
+  lifeZone,
   lyricIndexAt,
   makePlayNotes,
   normalizeTouchPosition,
   rankFor,
-  rankMeterState,
   accuracy,
   releaseHold,
   repressHold,
@@ -66,7 +67,7 @@ export interface GameResult {
   rank: Rank;
   /** オートプレイで演奏したか（true の回はベストスコアに残さない） */
   autoplay: boolean;
-  /** 精度下限を割ってゲームオーバーになったか（true の回はベストスコアに残さない） */
+  /** ライフが尽きてゲームオーバーになったか（true の回はベストスコアに残さない） */
   failed: boolean;
 }
 
@@ -100,16 +101,14 @@ const RESUME_COUNTDOWN_MS = 1000;
 const JUDGE_LABEL: Record<Judge, string> = { perfect: 'PERFECT', great: 'GREAT', good: 'GOOD', miss: 'MISS' };
 const JUDGE_COLOR: Record<Judge, string> = { perfect: '#ffd166', great: '#4ecdc4', good: '#9aa8ff', miss: '#ff6b6b' };
 
-/** ランクの色（メーターの fill の色に使う: C=グレー / B=ブロンズ / A=青 / S=金） */
-const RANK_COLORS: Record<Rank, string> = { C: '#c8ccd4', B: '#c98a4b', A: '#7fb2d9', S: '#f2c14e' };
-/** ゲームオーバーライン（精度下限）の色 */
-const GAME_OVER_COLOR = '#ff4545';
+/** ライフの帯ごとの色（十分=緑 / 注意=黄 / 危険=赤） */
+const LIFE_COLORS: Record<'safe' | 'caution' | 'danger', string> = { safe: '#3ddc84', caution: '#ffd23f', danger: '#ff5252' };
 /**
- * ランクメーターの置き場所（座標はステージ内）。v1.4.9 の上部 UI 見直しで、
+ * ライフメーターの置き場所（座標はステージ内）。v1.4.9 の上部 UI 見直しで、
  * 中断ボタン・スコアと同じ1行（中心 y = PAUSE_BTN.cy）に集約し、背景パネルは撤去した。
- * バーは中断ボタンの右から、右端のスコアの左に収まる幅で引く（% はバーの右に置く）。
+ * バーは中断ボタンの右から、右端のスコアの左に収まる幅で引く。
  */
-const RANK_METER = { meterX: 62, meterY: 25, meterH: 8, pctW: 46, scoreGap: 10, edgeGap: 14 };
+const LIFE_METER = { meterX: 62, meterY: 25, meterH: 8, scoreGap: 10, edgeGap: 14 };
 
 /** コンボ段階ごとのベール（暗幕）の濃さ。段階が上がるほど薄くなり、ジャケットが冴える */
 const TIER_VEIL_ALPHA = [0.62, 0.57, 0.52, 0.46, 0.4] as const;
@@ -280,6 +279,8 @@ export class Game {
   private autoplay = false;
   private notes: PlayNote[] = [];
   private counts: JudgementCounts = emptyCounts();
+  /** ライフ（0〜LIFE_MAX）。判定の発生順に増減するので counts からは再計算しない */
+  private life = LIFE_MAX;
   private score = 0;
   private combo = 0;
   private maxCombo = 0;
@@ -536,6 +537,11 @@ export class Game {
     return this.autoplay;
   }
 
+  /** テスト用の入口向け: 現在のライフ（0〜LIFE_MAX） */
+  get lifeValue(): number {
+    return this.life;
+  }
+
   /** テスト用の入口向け: 曲の現在位置（ms。READY 中は負、演奏中でなければ -1） */
   songPositionMs(): number {
     if (!this.playing) return -1;
@@ -576,6 +582,7 @@ export class Game {
     setData('autoplay', autoplay ? 'on' : 'off');
     this.notes = makePlayNotes(entry.data.charts[difficulty], offsetMs);
     this.counts = emptyCounts();
+    this.life = LIFE_MAX;
     this.score = 0;
     this.combo = 0;
     this.maxCombo = 0;
@@ -861,9 +868,10 @@ export class Game {
       startHoldSound(note, tier, note.timeMs + note.holdMs - nowMs, progress, this.entry?.data.bpm ?? 120);
     } else {
       this.counts[judge]++;
+      this.life = applyLifeDelta(this.life, judge);
     }
     setData('score', this.score);
-    // 精度が下限を割ったらゲームオーバー（GOOD の積み重ねでも起こりうる）
+    // ライフが尽きたらゲームオーバー
     this.checkGameOver();
   }
 
@@ -1081,69 +1089,54 @@ export class Game {
   }
 
   /**
-   * ゲームオーバーの発動チェック（オーナー指示 2026-11-22: ライフゲージは作らず、
-   * ランクメーターの精度が下限 50% を割ったらゲームオーバー。判定の猶予 20 ノーツ、
-   * 判定ロジックは logic.ts の isGameOver）。
+   * ゲームオーバーの発動チェック（案1：ライフ制。オーナー指示 2026-11-22 で
+   * 累計精度方式から作り替え）。ライフが 0 になったらその場で演奏を終了する。
    * 判定が更新される経路（ヒット・ミス掃除・長押しの成否）の直後から呼び、
-   * 発動したらその場で演奏を終了する。発動して終了させたときだけ true を返す
+   * 発動して終了させたときだけ true を返す
    * （ループ内から呼ばれた場合は、そのフレームの残りを打ち切るために使う）。
    * オートプレイでは発動しない。中断中は判定が動かないので対象にしない。
    */
   private checkGameOver(): boolean {
     if (this.autoplay || this.paused || !this.playing) return false;
-    if (!isGameOver(this.counts)) return false;
+    if (!isLifeGameOver(this.life)) return false;
     this.finish(true);
     return true;
   }
 
   /**
-   * ランクメーター（演奏画面の上部に常時表示。オーナー指示 2026-11-22「スコアのメーター表示して／ランクがわかるやつ」で新設）。
-   * v1.4.7 で簡素化（オーナー指示「もっとしんぷるにできないか？」「大きいランク表示いらないかも。
-   * 結果で分かるので、メーターは目安程度で」）: 残すのは次の3要素だけにした。
-   * (1) 細いバー1本（fill の長さ = 現在精度、色 = 現在ランクの色）、
-   * (2) ゲームオーバーライン（下限 50% の位置の赤い tick）、(3) バーの右の精度 % 表示。
-   * バッジ・ゾーン色分け・目盛りラベル・OUT ラベルと圏外ゾーン・「次のランクまで」は撤去した。
-   * v1.4.9 の上部 UI 見直しで、中断ボタン・スコアと同じ1行に集約し、背景パネルも撤去した
-   * （バーは中断ボタンの右から、右端のスコアの手前までに引く。スコアの幅は実測する）。
-   * 精度は結果画面と同じく accuracy(counts) で、演奏中は判定済みノーツに対する現在値になる。
-   * 判定がまだ無い開始直後は、空のバーと tick だけを出す（% は出さない）。
+   * ライフメーター（演奏画面の上部に常時表示）。沿革：v1.4.4 で精度ベースの
+   * ランクメーターとして新設 → v1.4.7 で細いバー＋tick＋% の簡素形 → v1.4.9 で
+   * 上部1行に集約 → v1.4.12 で案1（ライフ制）に作り替え（オーナー指示 2026-11-22）。
+   * 残すのは細いバー1本だけ：fill の長さ = 現在のライフ、色 = ライフの帯
+   * （十分=緑／注意=黄／危険=赤）。危険域では fill を点滅させて危険が読めるようにする。
+   * 精度 % 表示と旧ゲームオーバーライン（50% tick）は廃止（精度とランクは結果画面のみ）。
+   * バーは中断ボタンの右から、右端のスコアの手前までに引く（スコアの幅は実測する）。
    */
-  private drawRankMeter(g: CanvasRenderingContext2D, W: number): void {
-    const st = rankMeterState(this.counts);
-    const M = RANK_METER;
-    // バーの右端は、% の分を空けて、さらに右端のスコアに重ならない位置まで。
+  private drawLifeMeter(g: CanvasRenderingContext2D, W: number): void {
+    const M = LIFE_METER;
+    // バーの右端は、右端のスコアに重ならない位置まで。
     // スコアは右端 (W - edgeGap) に右寄せで出るので、その実測幅の分を空ける
     g.font = SCORE_FONT;
     const scoreW = g.measureText(String(this.score).padStart(7, '0')).width;
-    const pctRight = W - M.edgeGap - scoreW - M.scoreGap;
-    // バー: 暗いトラックの上に、現在精度までの fill を現在ランクの色で引く
+    const barRight = W - M.edgeGap - scoreW - M.scoreGap;
     const mx = M.meterX;
-    const mw = Math.max(0, pctRight - M.pctW - mx);
-    const xAt = (acc: number): number => mx + (mw * Math.max(0, Math.min(100, acc))) / 100;
+    const mw = Math.max(0, barRight - mx);
+    const zone = lifeZone(this.life);
+    // バー: 暗いトラックの上に、現在のライフまでの fill を帯の色で引く
     g.beginPath();
     g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
     g.fillStyle = '#2a2f3a';
     g.fill();
-    if (st.judged > 0 && st.accuracy > 0) {
+    if (this.life > 0) {
       g.save();
       g.beginPath();
       g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
       g.clip();
-      g.fillStyle = RANK_COLORS[st.rank];
-      g.fillRect(mx, M.meterY, xAt(st.accuracy) - mx, M.meterH);
+      // 危険域は点滅させて「やばい」が読めるようにする（約0.35秒周期で明滅）
+      if (zone === 'danger') g.globalAlpha = 0.55 + 0.45 * Math.sin(performance.now() / 110);
+      g.fillStyle = LIFE_COLORS[zone];
+      g.fillRect(mx, M.meterY, (mw * this.life) / LIFE_MAX, M.meterH);
       g.restore();
-    }
-    // ゲームオーバーライン（下限の位置に赤い細線だけ。バーを少しはみ出させて目印にする）
-    g.fillStyle = GAME_OVER_COLOR;
-    g.fillRect(xAt(GAME_OVER_ACCURACY_FLOOR) - 1, M.meterY - 2, 2, M.meterH + 4);
-
-    // 精度の %（バーの右に小さく。判定が無いうちは出さない）
-    if (st.judged > 0) {
-      g.textAlign = 'right';
-      g.fillStyle = '#fff';
-      g.font = 'bold 13px sans-serif';
-      g.fillText(`${st.accuracy.toFixed(1)}%`, pctRight, M.meterY + M.meterH / 2 + 5);
-      g.textAlign = 'left';
     }
   }
 
@@ -1242,12 +1235,13 @@ export class Game {
     const missed = isPaused ? 0 : sweepMisses(this.notes, nowMs);
     if (missed > 0) {
       this.counts.miss += missed;
+      this.life = applyLifeDelta(this.life, 'miss', missed);
       this.combo = 0; // コンボが切れたら tier も 0 に戻り、演出は素に戻る
       this.showJudge('miss');
       this.syncCombo();
       // ミス音はこの掃除で1回だけ（複数ノーツ同時ミスでも重ねない。連続フレームの抑制は playMissSound 側）
       playMissSound();
-      // 精度が下限を割ったら、そのフレームでゲームオーバーにして打ち切る
+      // ライフが尽きたら、そのフレームでゲームオーバーにして打ち切る
       if (this.checkGameOver()) return;
     }
 
@@ -1263,6 +1257,7 @@ export class Game {
       }
       if (ev.completed && n.headJudge) {
         this.counts[n.headJudge]++;
+        this.life = applyLifeDelta(this.life, n.headJudge);
         this.score += HOLD_COMPLETE_BONUS[n.headJudge];
         this.holdsCompleted++;
         setData('holdsCompleted', this.holdsCompleted);
@@ -1278,6 +1273,7 @@ export class Game {
       }
       if (ev.failed) {
         this.counts.miss++;
+        this.life = applyLifeDelta(this.life, 'miss');
         this.combo = 0;
         this.showJudge('miss');
         this.syncCombo();
@@ -1289,7 +1285,7 @@ export class Game {
         playFailSound();
       }
     }
-    // 長押しの成否で判定が動いた直後にも、精度下限のチェックをする
+    // 長押しの成否でライフが動いた直後にも、ゲームオーバーのチェックをする
     if (this.checkGameOver()) return;
 
     g.fillStyle = '#0e1018';
@@ -1641,7 +1637,7 @@ export class Game {
     g.fillRect(0, 0, W, 3);
     g.fillStyle = '#fff';
     g.fillRect(0, 0, W * Math.max(0, Math.min(1, nowSec / this.durationSec)), 3);
-    this.drawRankMeter(g, W);
+    this.drawLifeMeter(g, W);
 
     if ((nowMs > this.durationSec * 1000 + 500 && this.notes.every((n) => n.state !== 0)) || nowMs > this.durationSec * 1000 + 2000) {
       this.finish();

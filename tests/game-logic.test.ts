@@ -7,16 +7,18 @@ import {
   findKeyboardHit,
   findNearestNote,
   hitYRatio,
-  isGameOver,
+  LIFE_CAUTION,
+  LIFE_DANGER,
+  LIFE_DELTAS,
+  LIFE_MAX,
+  applyLifeDelta,
+  isLifeGameOver,
+  lifeZone,
   normalizeTouchPosition,
   makePlayNotes,
   rankFor,
-  rankMeterState,
-  GAME_OVER_ACCURACY_FLOOR,
-  GAME_OVER_GRACE_NOTES,
   RANK_THRESHOLDS,
   validateCharts,
-  type JudgementCounts,
   type NoteData,
   type SongData,
 } from '../src/game/logic';
@@ -259,90 +261,70 @@ describe('rankFor / RANK_THRESHOLDS（ランクの境目）', () => {
   });
 });
 
-describe('rankMeterState（演奏中のランクメーター）', () => {
-  const counts = (p: Partial<JudgementCounts>): JudgementCounts => ({ perfect: 0, great: 0, good: 0, miss: 0, ...p });
-
-  it('判定がまだ無いときは精度 0・ランク C・次は B まで 70', () => {
-    const st = rankMeterState(counts({}));
-    expect(st.judged).toBe(0);
-    expect(st.accuracy).toBe(0);
-    expect(st.rank).toBe('C');
-    expect(st.nextRank).toBe('B');
-    expect(st.toNext).toBeCloseTo(70);
+describe('ライフ制（案1：メーターとゲームオーバー）', () => {
+  it('増減の初期値：MISS −4 / GOOD −1 / GREAT ＋0.2 / PERFECT ＋0.4、最大 100', () => {
+    expect(LIFE_MAX).toBe(100);
+    expect(LIFE_DELTAS).toEqual({ perfect: 0.4, great: 0.2, good: -1, miss: -4 });
   });
 
-  it('全 PERFECT なら S で、次のランクは無い', () => {
-    const st = rankMeterState(counts({ perfect: 10 }));
-    expect(st.judged).toBe(10);
-    expect(st.accuracy).toBeCloseTo(100);
-    expect(st.rank).toBe('S');
-    expect(st.nextRank).toBeNull();
-    expect(st.toNext).toBe(0);
+  it('満タンから MISS 25 連続でちょうど 0 になり、ゲームオーバーになる', () => {
+    let life = LIFE_MAX;
+    for (let i = 0; i < 24; i++) life = applyLifeDelta(life, 'miss');
+    expect(life).toBeCloseTo(4);
+    expect(isLifeGameOver(life)).toBe(false);
+    life = applyLifeDelta(life, 'miss');
+    expect(life).toBe(0);
+    expect(isLifeGameOver(life)).toBe(true);
   });
 
-  it('精度は結果画面と同じ重み（GREAT×0.7 / GOOD×0.4）で、判定済みノーツが分母', () => {
-    // (8 + 2×0.7) / 10 = 94% → A、S まであと 1
-    const st = rankMeterState(counts({ perfect: 8, great: 2 }));
-    expect(st.accuracy).toBeCloseTo(94);
-    expect(st.rank).toBe('A');
-    expect(st.nextRank).toBe('S');
-    expect(st.toNext).toBeCloseTo(1);
+  it('猶予はない：序盤でもライフが尽きれば即ゲームオーバー（満タン開始が緩衝）', () => {
+    // 最初の25ノーツを全部ミスしたら、その時点で終わる（旧方式の20ノーツ猶予は廃止）
+    let life = LIFE_MAX;
+    for (let i = 0; i < 25; i++) life = applyLifeDelta(life, 'miss');
+    expect(isLifeGameOver(life)).toBe(true);
   });
 
-  it('ミスは分母に入り分子には入らない（B 帯の例）', () => {
-    // (7 + 0.7) / 10 = 77% → B、A まであと 8
-    const st = rankMeterState(counts({ perfect: 7, great: 1, miss: 2 }));
-    expect(st.judged).toBe(10);
-    expect(st.accuracy).toBeCloseTo(77);
-    expect(st.rank).toBe('B');
-    expect(st.nextRank).toBe('A');
-    expect(st.toNext).toBeCloseTo(8);
+  it('良い判定で少しずつ回復するが、上限 100 を超えない', () => {
+    expect(applyLifeDelta(50, 'perfect')).toBeCloseTo(50.4);
+    expect(applyLifeDelta(50, 'great')).toBeCloseTo(50.2);
+    expect(applyLifeDelta(99.9, 'perfect')).toBe(100);
+    expect(applyLifeDelta(100, 'perfect')).toBe(100);
   });
 
-  it('GOOD の重み 0.4 が効く（C 帯の例）', () => {
-    // (5 + 4×0.4) / 10 = 66% → C、B まであと 4
-    const st = rankMeterState(counts({ perfect: 5, good: 4, miss: 1 }));
-    expect(st.accuracy).toBeCloseTo(66);
-    expect(st.rank).toBe('C');
-    expect(st.nextRank).toBe('B');
-    expect(st.toNext).toBeCloseTo(4);
-  });
-});
-
-describe('isGameOver（精度下限によるゲームオーバー）', () => {
-  const counts = (p: Partial<JudgementCounts>): JudgementCounts => ({ perfect: 0, great: 0, good: 0, miss: 0, ...p });
-
-  it('下限は 50%、猶予は判定 20 ノーツ', () => {
-    expect(GAME_OVER_ACCURACY_FLOOR).toBe(50);
-    expect(GAME_OVER_GRACE_NOTES).toBe(20);
+  it('GOOD でも少し減り、0 未満にはならない', () => {
+    expect(applyLifeDelta(50, 'good')).toBe(49);
+    expect(applyLifeDelta(2, 'miss')).toBe(0);
   });
 
-  it('猶予の間は、全ミスでも発動しない（序盤の即死防止）', () => {
-    expect(isGameOver(counts({}))).toBe(false);
-    expect(isGameOver(counts({ miss: GAME_OVER_GRACE_NOTES }))).toBe(false);
+  it('同時ミスは times でまとめて引ける（ミス掃除の経路）', () => {
+    expect(applyLifeDelta(100, 'miss', 3)).toBe(88);
   });
 
-  it('猶予を超えて精度が 50% を割ると発動する', () => {
-    // 21 ノーツ全部ミス → 精度 0%
-    expect(isGameOver(counts({ miss: 21 }))).toBe(true);
-    // (10 + 0) / 21 ≒ 47.6% → 発動
-    expect(isGameOver(counts({ perfect: 10, miss: 11 }))).toBe(true);
-    // 全 GOOD（重み 0.4）でも 40% までしか行かないので発動する（ミス 0 でも起こりうる）
-    expect(isGameOver(counts({ good: 21 }))).toBe(true);
+  it('並び順で結果が変わる：満タン付近の回復は頭打ちになる', () => {
+    // 同じ内訳（PERFECT 10 / MISS 1）でも、ミスが先なら回復が全部効き、
+    // ミスが後なら満タンで溢れた回復分だけ損をする
+    let missFirst = LIFE_MAX;
+    missFirst = applyLifeDelta(missFirst, 'miss');
+    for (let i = 0; i < 10; i++) missFirst = applyLifeDelta(missFirst, 'perfect');
+    let missLast = LIFE_MAX;
+    for (let i = 0; i < 10; i++) missLast = applyLifeDelta(missLast, 'perfect');
+    missLast = applyLifeDelta(missLast, 'miss');
+    expect(missFirst).toBe(100);
+    expect(missLast).toBe(96);
   });
 
-  it('ちょうど 50.0% は「割っていない」ので発動しない', () => {
-    // 11 / 22 = 50.0%
-    expect(isGameOver(counts({ perfect: 11, miss: 11 }))).toBe(false);
+  it('帯：50 超は safe、50 以下は caution、30 以下は danger', () => {
+    expect(LIFE_CAUTION).toBe(50);
+    expect(LIFE_DANGER).toBe(30);
+    expect(lifeZone(100)).toBe('safe');
+    expect(lifeZone(51)).toBe('safe');
+    expect(lifeZone(50)).toBe('caution');
+    expect(lifeZone(31)).toBe('caution');
+    expect(lifeZone(30)).toBe('danger');
+    expect(lifeZone(0)).toBe('danger');
   });
 
-  it('精度が下限以上なら発動しない（C 帯の下側の例）', () => {
-    // (11 + 0.7) / 21 ≒ 55.7% → C 帯（50〜70）の内側
-    expect(isGameOver(counts({ perfect: 11, great: 1, miss: 9 }))).toBe(false);
-    expect(isGameOver(counts({ perfect: 21 }))).toBe(false);
-  });
-
-  it('結果ランクの定義は変えない（50% 未満でも rankFor は C）', () => {
+  it('結果ランクの定義は変えない（精度 50% 未満でも rankFor は C）', () => {
     expect(rankFor(49.9)).toBe('C');
     expect(rankFor(0)).toBe('C');
   });

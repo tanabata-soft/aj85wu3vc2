@@ -537,7 +537,7 @@ test('広い画面ではプレイ画面がスマホ比率のステージにな�
   expect(lyric.relTop).toBeLessThan(lyric.stageHeight * 0.82);
 });
 
-test('ノーツを逃し続けると、猶予明けにゲームオーバーになる', async ({ page }) => {
+test('ノーツを逃し続けると、ライフが尽きてゲームオーバーになる', async ({ page }) => {
   test.setTimeout(120_000);
   await page.locator('#btn-open-game').click();
   // ゲームオーバー音が鳴ったことを記録する
@@ -550,8 +550,8 @@ test('ノーツを逃し続けると、猶予明けにゲームオーバーに�
   });
   await page.locator('#start-button').click();
   await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
-  // 何も叩かずに待ち続ける。序盤の猶予（判定20ノーツ）を超え、精度が下限（50%）を
-  // 割った時点でゲームオーバーになり、音が鳴ってから結果カードが出る
+  // 何も叩かずに待ち続ける。ミスのたびにライフが減り（MISS −4）、25ノーツ目の
+  // ミスでライフが 0 になってゲームオーバーになり、音が鳴ってから結果カードが出る
   await expect(page.locator('#result-screen')).toBeVisible({ timeout: 90_000 });
   await expect(page.locator('#result-gameover')).toBeVisible();
   await expect(page.locator('#result-gameover')).toHaveText('GAME OVER');
@@ -572,6 +572,26 @@ test('ノーツを逃し続けると、猶予明けにゲームオーバーに�
   await expect(page.locator('#menu-screen')).toBeVisible();
   await expect(page.locator('#menu-best')).toHaveText('0');
   await expect(page.locator('#menu-best-rank')).toHaveText('—');
+});
+
+test('ライフは満タンから始まり、ミスで減っていく', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto('/?debug=1');
+  await page.locator('#btn-open-game').click();
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  const life = (): Promise<number> =>
+    page.evaluate(() => {
+      const api = (window as unknown as { __pwaTest?: { getGameState?: () => { life: number } } }).__pwaTest;
+      return api?.getGameState?.().life ?? -1;
+    });
+  // 開始直後は満タン
+  await expect.poll(life).toBe(100);
+  // 何も叩かなければ、ミス（−4）のたびに減っていく。数ノーツ逃した時点では
+  // まだ 0 にはならず、演奏は続いている
+  await expect.poll(life, { timeout: 30_000 }).toBeLessThanOrEqual(84);
+  expect(await life()).toBeGreaterThan(0);
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing');
 });
 
 test('フリックノーツは上フリックで取れる（タップでは取れない）', async ({ page }) => {

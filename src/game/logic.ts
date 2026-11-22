@@ -223,67 +223,51 @@ export function rankFor(acc: number): Rank {
   return 'C';
 }
 
-/** ランクの並び（低い順）。次のランクを引くために使う */
-const RANK_ORDER: readonly Rank[] = ['C', 'B', 'A', 'S'];
+/**
+ * ライフ（演奏中のメーターとゲームオーバーの仕組み。案1：ライフ制）。
+ * オーナー指示 2026-11-22: 累計精度でメーターとゲームオーバーを決める方式
+ * （v1.4.4〜v1.4.10）は「序盤は1ミスが重く、後半はミスしてもほぼ下がらない」
+ * 歪みがあるため考え直し、古典的なライフ制に作り替えた（v1.4.12）。
+ * - メーターはライフ専用。精度とランクは結果画面でのみ出す（rankFor は不変）。
+ * - ライフは満タンから始まり、判定のたびに増減する。上限で頭打ちになるため
+ *   回復の効きは「判定の並び順」に依存する＝累計（counts）からは再計算できない。
+ *   呼び出し側（game.ts）が判定の発生順に applyLifeDelta で積み上げる。
+ * - 0 になったらその場でゲームオーバー。猶予は設けない（満タン開始が緩衝）。
+ */
 
-export interface RankMeterState {
-  /** 判定済みノーツに対する現在精度 (%) */
-  accuracy: number;
-  /** 現在ランク */
-  rank: Rank;
-  /** 次のランク。すでに S なら null */
-  nextRank: Rank | null;
-  /** 次のランクまで必要な精度の差（ポイント）。S なら 0 */
-  toNext: number;
-  /** 判定済みノーツ数（精度の分母） */
-  judged: number;
+/** ライフの最大値。演奏は満タンから始める */
+export const LIFE_MAX = 100;
+
+/**
+ * 判定ごとのライフ増減。MISS は大きく減り、GOOD でも少し減る。
+ * PERFECT／GREAT の回復は控えめで、満タン付近では頭打ちになる分だけ
+ * 「序盤のミスを取り返すには良い判定を重ねる必要がある」効き方になる。
+ * 目安（hard 約600ノーツ）: ミス25連続で満タンから 0。ミス1割・PERFECT7割の
+ * 演奏では終盤に 10〜20 残る程度で、理不尽には落ちない。
+ */
+export const LIFE_DELTAS: Record<Judge, number> = { perfect: 0.4, great: 0.2, good: -1, miss: -4 };
+
+/** ライフの帯。caution 以下で注意、danger 以下で危険（表示色と点滅に使う） */
+export const LIFE_CAUTION = 50;
+export const LIFE_DANGER = 30;
+
+export type LifeZone = 'safe' | 'caution' | 'danger';
+
+/** 判定をライフへ反映した新しい値を返す（0〜LIFE_MAX に丸める）。times は同時ミスの個数用 */
+export function applyLifeDelta(life: number, judge: Judge, times = 1): number {
+  return Math.min(LIFE_MAX, Math.max(0, life + LIFE_DELTAS[judge] * times));
 }
 
-/**
- * 演奏中のランクメーター用の現在値。
- * 精度は結果画面とまったく同じ accuracy(counts) を使う。結果画面では曲の終わりに
- * 全ノーツが判定済みになるので分母が全ノーツ数になるだけで、定義は同一。
- * 長押しの tick や完了ボーナスはスコア専用で counts に入らないため、精度には効かない
- * （結果画面でも同じ）。
- */
-export function rankMeterState(counts: JudgementCounts): RankMeterState {
-  const acc = accuracy(counts);
-  const rank = rankFor(acc);
-  const nextRank = RANK_ORDER[RANK_ORDER.indexOf(rank) + 1] ?? null;
-  return {
-    accuracy: acc,
-    rank,
-    nextRank,
-    toNext: nextRank === null ? 0 : Math.max(0, RANK_THRESHOLDS[nextRank as Exclude<Rank, 'C'>] - acc),
-    judged: totalNotes(counts),
-  };
+/** ライフの帯（表示用） */
+export function lifeZone(life: number): LifeZone {
+  if (life <= LIFE_DANGER) return 'danger';
+  if (life <= LIFE_CAUTION) return 'caution';
+  return 'safe';
 }
 
-/**
- * ゲームオーバーの下限（精度 %）。ランク帯に下限を新設する概念で、C の帯は
- * 50〜70 とし、50 未満は「圏外」。結果ランクの定義（rankFor）とは別で、
- * rankFor は従来どおり 50 未満でも C を返す（下限はゲームオーバー専用の概念）。
- * オーナー指示 2026-11-22: ライフゲージは作らず、ランクメーターの精度そのものを
- * ゲームオーバーの条件にする（「ランクメーターが一定以下になるとゲームオーバー」
- * 「C割ったらは？」を具体化）。
- */
-export const GAME_OVER_ACCURACY_FLOOR = 50;
-
-/**
- * ゲームオーバーの猶予（判定済みノーツ数）。序盤は1ミスで精度が 0% になって
- * 即死するのを防ぐため、判定済みがこの数を超えるまでは発動しない。
- */
-export const GAME_OVER_GRACE_NOTES = 20;
-
-/**
- * ゲームオーバー状態か（現在精度が下限を割ったか）。
- * 精度は rankMeterState と同じ accuracy(counts)（判定済みノーツに対する現在値）。
- * ちょうど下限（50.0%）は「割っていない」のでゲームオーバーにしない。
- * オートプレイで発動させないのは呼び出し側（game.ts）の責務。
- */
-export function isGameOver(counts: JudgementCounts): boolean {
-  if (totalNotes(counts) <= GAME_OVER_GRACE_NOTES) return false;
-  return accuracy(counts) < GAME_OVER_ACCURACY_FLOOR;
+/** ライフが尽きてゲームオーバーか。オートプレイで発動させないのは呼び出し側の責務 */
+export function isLifeGameOver(life: number): boolean {
+  return life <= 0;
 }
 
 /** 長押しの頭の判定（ミス以外） */
