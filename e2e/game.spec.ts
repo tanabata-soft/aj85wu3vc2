@@ -361,13 +361,10 @@ test('フルコンボでハイスコアも更新すると、印が両方出て�
 
 test('オートプレイのフルコンボでは印とボイスは出るが、ハイスコア更新は出ない', async ({ page }) => {
   test.setTimeout(90_000);
-  // オートプレイをオンにしてから開く（デバッグモードでのみ効く）
-  await page.addInitScript(() => {
-    localStorage.setItem('nks006-shift-award-game-autoplay', 'true');
-  });
   await page.goto('/?debug=1');
   await expect(page.locator('#view-cover')).toBeVisible();
   await page.locator('#btn-open-game').click();
+  await expect(page.locator('#menu-screen')).toBeVisible();
   await page.evaluate(() => {
     const w = window as unknown as { __voices: string[] };
     w.__voices = [];
@@ -375,6 +372,10 @@ test('オートプレイのフルコンボでは印とボイスは出るが、�
       const kind = (e as CustomEvent).detail?.kind as string | undefined;
       if (kind === 'voice-fullcombo' || kind === 'voice-newrecord') w.__voices.push(kind);
     });
+    // デバッグモード＋オートプレイをテスト API で有効化する（オートプレイは
+    // デバッグモードでのみ効く。撮影スクリプトと同じ作法）
+    const api = (window as unknown as { __pwaTest?: { setGameState?: (p: Record<string, unknown>) => void } }).__pwaTest;
+    api?.setGameState?.({ debugMode: true, autoplay: true });
   });
   await page.locator('#start-button').click();
   await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
