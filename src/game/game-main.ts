@@ -8,7 +8,10 @@
 import './game.css';
 import {
 DIFFICULTIES,
+SPEED_DEFAULT,
+SPEED_STEP,
 clampOffset,
+clampSpeed,
 isFullCombo,
 type ComboAppearance,
 type Difficulty,
@@ -50,6 +53,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   let selectedDiff: Difficulty = load<Difficulty>('difficulty', 'easy');
   if (!(selectedDiff in DIFFICULTIES)) selectedDiff = 'easy';
   let offsetMs = clampOffset(load<number>('offset', 0));
+  // 音符の落下速度の倍率（プレイヤー設定。×1.0 がいままでの速度）
+  let speedMul = clampSpeed(load<number>('speed', SPEED_DEFAULT));
   // 効果音と歌詞表示のオンオフは廃止した（オーナー指示 2026-11-20）。どちらも常にオン。
   // 過去にオフで保存した端末でも戻せるよう、起動時に効果音をオンへ上書きしておく
   setSound(true);
@@ -342,10 +347,12 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       else img.onload = apply;
     }
     $('offset-value').textContent = `${offsetMs > 0 ? '+' : ''}${offsetMs}ms`;
+    $('speed-value').textContent = `×${speedMul.toFixed(1)}`;
     renderToggle('vibrate-button', isVibrateOn());
     setData('song', selectedSong);
     setData('difficulty', selectedDiff);
     setData('offset', offsetMs);
+    setData('speed', speedMul);
     setData('sound', isSoundOn() ? 'on' : 'off');
     setData('vibrate', isVibrateOn() ? 'on' : 'off');
     setData('lyrics', 'on');
@@ -363,6 +370,16 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   }
   $('offset-minus').addEventListener('click', () => setOffset(offsetMs - 10));
   $('offset-plus').addEventListener('click', () => setOffset(offsetMs + 10));
+  function setSpeed(next: number): void {
+    const clamped = clampSpeed(next);
+    if (clamped === speedMul) return;
+    speedMul = clamped;
+    save('speed', speedMul);
+    renderMenu();
+    playUiClick();
+  }
+  $('speed-minus').addEventListener('click', () => setSpeed(speedMul - SPEED_STEP));
+  $('speed-plus').addEventListener('click', () => setSpeed(speedMul + SPEED_STEP));
   $('vibrate-button').addEventListener('click', () => {
     setVibrate(!isVibrateOn());
     renderMenu();
@@ -646,7 +663,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     try {
       show('game');
       // オートプレイはデバッグモードがオンのときだけ効く
-      await game.start(entry, selectedDiff, offsetMs, isDebug() && autoplayOn);
+      await game.start(entry, selectedDiff, offsetMs, isDebug() && autoplayOn, speedMul);
       status.textContent = '';
     } catch {
       show('menu');
@@ -717,6 +734,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       song: selectedSong,
       difficulty: selectedDiff,
       offset: offsetMs,
+      speed: speedMul,
       playing: game.isPlaying,
       songMs: game.songPositionMs(),
       sound: isSoundOn(),
@@ -736,6 +754,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       }
       if (typeof patch.difficulty === 'string' && patch.difficulty in DIFFICULTIES) selectedDiff = patch.difficulty as Difficulty;
       if (typeof patch.offset === 'number') offsetMs = clampOffset(patch.offset);
+      if (typeof patch.speed === 'number') speedMul = clampSpeed(patch.speed);
       if (typeof patch.debugMode === 'boolean') {
         // デバッグモードは CD 側と共有の旗（バージョン表示の5回タップと同じもの）
         setDebug(patch.debugMode);

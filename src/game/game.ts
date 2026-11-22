@@ -5,15 +5,22 @@
 // 演出（粒子・輪・波紋・判定文字）はすべて経過時間ベースで進める（120Hz でも 60Hz と同じ見え方にする）。
 import {
   DIFFICULTIES,
+  FLICK_MIN_UP_PX,
+  FLICK_TIME_LIMIT_MS,
   HOLD_COMPLETE_BONUS,
   HOLD_TICK_SCORE,
   LANE_COLORS,
+  SPEED_DEFAULT,
   advanceHold,
   beginHold,
+  clampSpeed,
   comboAppearance,
   comboTier,
+  effectiveFallSeconds,
   emptyCounts,
+  findFlickHit,
   findHit,
+  findNearestNote,
   isComboShow,
   lyricIndexAt,
   makePlayNotes,
@@ -267,6 +274,10 @@ export class Game {
   private height = 0;
   /** 押さえ中のポインタ（pointerId → レーン）。マルチタッチで長押ししながら他レーンを叩ける */
   private pointerLanes = new Map<number, number>();
+  /** フリック検出用の、ポインタごとの押し始めの記録（位置・壁時計・発火済みか） */
+  private pointerGestures = new Map<number, { startY: number; startWall: number; flicked: boolean }>();
+  /** 音符の落下速度の倍率（プレイヤー設定。start で受け取る） */
+  private speed = SPEED_DEFAULT;
   /** 押さえ中のキー（レーン） */
   private keyLanes = new Set<number>();
   private holdsCompleted = 0;
@@ -290,6 +301,7 @@ export class Game {
     if (this.autoplay) return;
     const lane = this.laneAt(px);
     this.pointerLanes.set(e.pointerId, lane);
+    this.pointerGestures.set(e.pointerId, { startY: py, startWall: performance.now(), flicked: false });
     try {
       this.canvas.setPointerCapture(e.pointerId);
     } catch {
@@ -305,6 +317,20 @@ export class Game {
     const rect = this.canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
+    // フリック検出: 押し始めから短時間に、上へ大きく動いたらフリックとして発火する
+    // （ポインタごとに1回まで）。縦の動きは基本は同じレーン内で起きる
+    const gesture = this.pointerGestures.get(e.pointerId);
+    if (
+      gesture &&
+      !gesture.flicked &&
+      !this.paused &&
+      gesture.startY - py >= FLICK_MIN_UP_PX &&
+      performance.now() - gesture.startWall <= FLICK_TIME_LIMIT_MS
+    ) {
+      gesture.flicked = true;
+      this.flickLane(prev, px, py);
+      return;
+    }
     const lane = this.laneAt(px);
     if (lane === prev) return;
     // 指がレーンをまたいだら、旧レーンは離した扱い、新レーンは押した扱いにする
@@ -315,6 +341,7 @@ export class Game {
 
   private onPointerUp = (e: PointerEvent): void => {
     const lane = this.pointerLanes.get(e.pointerId);
+    this.pointerGestures.delete(e.pointerId);
     if (lane === undefined) return;
     this.pointerLanes.delete(e.pointerId);
     if (this.playing) this.releaseLane(lane);
@@ -324,6 +351,7 @@ export class Game {
     // ポインタ捕捉が強制的に外れたとき（バックグラウンド遷移など）は、
     // pointerup が来ないことがある。捕捉を失った時点で「離した」扱いにする
     const lane = this.pointerLanes.get(e.pointerId);
+    this.pointerGestures.delete(e.pointerId);
     if (lane === undefined) return;
     this.pointerLanes.delete(e.pointerId);
     if (this.playing) this.releaseLane(lane);
@@ -388,6 +416,7 @@ export class Game {
    */
   private resetInput(): void {
     this.pointerLanes.clear();
+    this.pointerGestures.clear();
     this.keyLanes.clear();
     if (!this.playing) return;
     const nowMs = (nowSeconds() - this.startAt) * 1000;
@@ -459,8 +488,8 @@ export class Game {
     return (nowSeconds() - this.startAt) * 1000;
   }
 
-  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ */
-  async start(entry: SongEntry, difficulty: Difficulty, offsetMs: number, autoplay = false): Promise<void> {
+  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率（プレイヤー設定） */
+  async start(entry: SongEntry, difficulty: Difficulty, offsetMs: number, autoplay = false, speed = SPEED_DEFAULT): Promise<void> {
     // スタート操作のジェスチャの中で呼ばれる前提で、まず音声を unlock する
     unlockAudio();
     const session = ++this.startSession;
@@ -480,6 +509,7 @@ export class Game {
     this.entry = entry;
     this.difficulty = difficulty;
     this.autoplay = autoplay;
+    this.speed = clampSpeed(speed);
     setData('autoplay', autoplay ? 'on' : 'off');
     this.notes = makePlayNotes(entry.data.charts[difficulty], offsetMs);
     this.counts = emptyCounts();
@@ -494,6 +524,7 @@ export class Game {
     this.ripples = [];
     this.flash = [0, 0, 0, 0];
     this.pointerLanes.clear();
+    this.pointerGestures.clear();
     this.keyLanes.clear();
     stopAllHoldSounds();
     this.holdsCompleted = 0;
@@ -675,12 +706,8 @@ export class Game {
     return false;
   }
 
-  private pressLane(lane: number, rippleX?: number, rippleY?: number): void {
-    // 保険: 再生中に AudioContext が止まっていたら（iOS の interrupted など）、タップのついでに戻す。
-    // resume だけでは戻らないことがあるため、ジェスチャの中で効く強い unlock（resume＋
-    // 音声セッション再設定＋無音バッファ）を使う（2026-11-20 実機で「READY のまま
-    // タッチできない」症状が出たための強化）
-    if (audioContext().state !== 'running' || this.audioFrozen) unlockAudio();
+  /** レーンを叩いたときの共通の見た目（フラッシュ＋波紋）。タップとフリックで共用する */
+  private laneTapFx(lane: number, rippleX?: number, rippleY?: number): void {
     this.flash[lane] = 1;
     // 押した場所に波紋を出す（キーボードのときはレーンの判定ライン中央）
     const lw = this.width / 4;
@@ -692,6 +719,15 @@ export class Game {
       c: LANE_COLORS[lane],
     });
     if (this.ripples.length > 24) this.ripples.shift();
+  }
+
+  private pressLane(lane: number, rippleX?: number, rippleY?: number): void {
+    // 保険: 再生中に AudioContext が止まっていたら（iOS の interrupted など）、タップのついでに戻す。
+    // resume だけでは戻らないことがあるため、ジェスチャの中で効く強い unlock（resume＋
+    // 音声セッション再設定＋無音バッファ）を使う（2026-11-20 実機で「READY のまま
+    // タッチできない」症状が出たための強化）
+    if (audioContext().state !== 'running' || this.audioFrozen) unlockAudio();
+    this.laneTapFx(lane, rippleX, rippleY);
     const nowMs = (nowSeconds() - this.startAt) * 1000;
     // 猶予（grace）中の長押しがあれば、新しいノーツより先に押し直しとして扱う
     for (const n of this.notes) {
@@ -702,9 +738,26 @@ export class Game {
         return;
       }
     }
+    // いちばん近い未判定ノーツがフリックノーツなら、この押しはフリック操作の
+    // 始まりとして扱い、タップ判定も空振り音も出さない（フリック必須。
+    // 指を離すだけでは取れず、窓を過ぎれば通常のミスになる）
+    if (findNearestNote(this.notes, lane, nowMs)?.flick) return;
     const hit = findHit(this.notes, lane, nowMs);
     if (!hit) {
       // ノーツのないレーンを押したときも、ヒット音とは別の小さな音で「触れた」ことを返す
+      playEmptySound();
+      return;
+    }
+    this.hitNote(hit.note, hit.judge, nowMs);
+  }
+
+  /** フリック入力: フリックノーツ優先、無ければ通常のタップノーツを取る（findFlickHit） */
+  private flickLane(lane: number, rippleX?: number, rippleY?: number): void {
+    if (audioContext().state !== 'running' || this.audioFrozen) unlockAudio();
+    this.laneTapFx(lane, rippleX, rippleY);
+    const nowMs = (nowSeconds() - this.startAt) * 1000;
+    const hit = findFlickHit(this.notes, lane, nowMs);
+    if (!hit) {
       playEmptySound();
       return;
     }
@@ -1004,7 +1057,8 @@ export class Game {
     if (tier > this.lastTier) this.tierFlash = 1;
     this.lastTier = tier;
     this.tierFlash = Math.max(0, this.tierFlash - dt * 1.6);
-    const fall = DIFFICULTIES[this.difficulty].fallSeconds;
+    // 実効の落下時間は、難易度の基準値にプレイヤー設定の速度倍率を重ねたもの
+    const fall = effectiveFallSeconds(DIFFICULTIES[this.difficulty].fallSeconds, this.speed);
 
     // 歌詞の現在行が変わったら通知する（表示は main.ts 側の DOM）
     const li = lyricIndexAt(this.entry?.lyrics ?? [], nowMs);
@@ -1214,6 +1268,22 @@ export class Game {
       gn.beginPath();
       gn.roundRect(n.lane * lw + 8, y - 14, lw - 16, 28, 8);
       gn.fill();
+      if (n.flick) {
+        // フリックノーツの目印: 白い輪郭＋白い上向きシェブロン（∧）
+        const cx = n.lane * lw + lw / 2;
+        gn.strokeStyle = '#fff';
+        gn.lineWidth = 2.5;
+        gn.beginPath();
+        gn.roundRect(n.lane * lw + 11, y - 11, lw - 22, 22, 6);
+        gn.stroke();
+        gn.lineWidth = 3;
+        gn.lineJoin = 'round';
+        gn.beginPath();
+        gn.moveTo(cx - 9, y + 5);
+        gn.lineTo(cx, y - 5);
+        gn.lineTo(cx + 9, y + 5);
+        gn.stroke();
+      }
     }
 
     // ---- ヒット演出（時間ベースで更新） ----

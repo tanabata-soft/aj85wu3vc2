@@ -178,7 +178,7 @@
         </div>
 
         <h3 class="sub-title">遊び方</h3>
-        <p class="note">ノーツが下の枠に重なったらタップ。長い帯は終わるまで押しっぱなし（パソコンは D / F / J / K）。演奏は左上の ✕ で中断できます。</p>
+        <p class="note">ノーツが下の枠に重なったらタップ。白い輪郭の▲ノーツは上にフリック。長い帯は終わるまで押しっぱなし（パソコンは D / F / J / K）。演奏は左上の ✕ で中断できます。</p>
 
         <h3 class="sub-title">タイミング調整（オフセット）</h3>
         <div class="offset-row">
@@ -189,6 +189,14 @@
         <p class="note">ノーツが遅れて感じる → ＋ ／ 早く感じる → −。Bluetoothイヤホンのときは ＋ が目安です。</p>
         <button id="latency-open" type="button" class="dialog-close-wide" aria-haspopup="dialog" aria-controls="latency-dialog">遅延チェック</button>
         <p class="note">拍の音と光に合わせてタップすると、タイミングのずれを測ってオフセットに反映できます。</p>
+
+        <h3 class="sub-title">音符の速度</h3>
+        <div class="offset-row">
+          <button type="button" id="speed-minus" aria-label="音符の速度を下げる">−</button>
+          <span id="speed-value" aria-live="polite">×1.0</span>
+          <button type="button" id="speed-plus" aria-label="音符の速度を上げる">＋</button>
+        </div>
+        <p class="note">ノーツが落ちる速さです。×1.0 がいままでの速さで、数字が大きいほど速く落ちます（×0.8〜×2.0、0.1刻み）。</p>
 
         <div class="toggle-row">
           <span>振動</span>
