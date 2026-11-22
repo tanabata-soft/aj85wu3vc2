@@ -8,11 +8,16 @@ export type SongId = string;
 export type Difficulty = 'easy' | 'normal' | 'hard';
 export type Judge = 'perfect' | 'great' | 'good' | 'miss';
 
+/** ノーツの種別。'flick' はフリックノーツ（タップでは取れず、上フリック必須） */
+export type NoteKind = 'flick';
+
 /**
- * 譜面のノーツ。[時刻(ms), レーン(0-3), 長押し(ms)?]
+ * 譜面のノーツ。[時刻(ms), レーン(0-3), 長押し(ms)?, 種別?]
  * 3要素目があるノーツは長押し（ホールド）で、頭からその時間だけ押し続ける。
+ * 4要素目が 'flick' のノーツはフリックノーツ。JSON では [t, lane, 0, "flick"] と書く
+ * （長押しは持たないので3要素目は 0）。
  */
-export type NoteData = readonly [number, number, number?];
+export type NoteData = readonly [number, number, number?, NoteKind?];
 
 export interface ChartSet {
   easy: NoteData[];
@@ -51,6 +56,28 @@ export const OFFSET_STEP = 10;
 export function clampOffset(ms: number): number {
   const stepped = Math.round(ms / OFFSET_STEP) * OFFSET_STEP;
   return Math.min(OFFSET_MAX, Math.max(OFFSET_MIN, stepped));
+}
+
+// ---- 音符の落下速度の調整（プレイヤー設定。難易度の fallSeconds に倍率で重なる） ----
+
+/** 速度の倍率の下限・上限と刻み幅。×1.0 がいままでの速度（既定） */
+export const SPEED_MIN = 0.8;
+export const SPEED_MAX = 2.0;
+export const SPEED_STEP = 0.1;
+export const SPEED_DEFAULT = 1.0;
+
+/** 倍率を刻みに丸めて範囲に収める。不正な値は既定（×1.0）にする */
+export function clampSpeed(value: number): number {
+  if (!Number.isFinite(value)) return SPEED_DEFAULT;
+  const stepped = Math.round(value / SPEED_STEP) * SPEED_STEP;
+  const clamped = Math.min(SPEED_MAX, Math.max(SPEED_MIN, stepped));
+  // 0.1 刻みの浮動小数誤差（1.3000000000000003 など）を落とす
+  return Math.round(clamped * 10) / 10;
+}
+
+/** 実効の落下時間（秒）。倍率が大きいほど速く落ちる（落下時間は短くなる） */
+export function effectiveFallSeconds(fallSeconds: number, speed: number): number {
+  return fallSeconds / clampSpeed(speed);
 }
 
 // ---- 遅延チェック（拍に合わせてタップし、タイミングのずれを実測する） ----
@@ -179,6 +206,8 @@ export interface PlayNote {
   state: 0 | 1 | 2;
   /** 長押しの長さ (ms)。0 は通常ノーツ */
   holdMs: number;
+  /** フリックノーツか（タップでは取れず、上フリックでのみ取れる） */
+  flick: boolean;
   /** 長押しの頭の判定。頭を押したときだけ入る */
   headJudge: HeadJudge | null;
   /** 長押しの進行状態 */
@@ -192,11 +221,12 @@ export interface PlayNote {
 }
 
 export function makePlayNotes(chart: NoteData[], offsetMs: number): PlayNote[] {
-  return chart.map(([t, lane, hold]) => ({
+  return chart.map(([t, lane, hold, kind]) => ({
     timeMs: t + offsetMs,
     lane,
     state: 0 as const,
     holdMs: hold ?? 0,
+    flick: kind === 'flick',
     headJudge: null,
     holdPhase: 'none' as const,
     graceStartMs: 0,
@@ -279,25 +309,71 @@ export function advanceHold(note: PlayNote, nowMs: number): HoldAdvance {
   return res;
 }
 
+/** フリックとみなす上方向の移動量 (px)。これ以上、上へ動いたらフリック発火 */
+export const FLICK_MIN_UP_PX = 40;
+/** フリックとして認める、押し始めからの時間 (ms)。これを過ぎた上移動はフリックにしない */
+export const FLICK_TIME_LIMIT_MS = 400;
+
 /**
- * タップしたレーンで、いちばん近い未判定ノーツを探す。
- * 判定窓の外なら null。notes は時刻昇順である前提（窓より先のノーツで打ち切る）。
+ * レーン内の未判定ノーツから、条件に合うもののうち時刻がいちばん近いものを探す。
+ * notes は時刻昇順である前提（判定窓より先のノーツで打ち切る）。
  */
-export function findHit(notes: PlayNote[], lane: number, nowMs: number): { note: PlayNote; judge: Exclude<Judge, 'miss'> } | null {
+function closestPending(
+  notes: PlayNote[],
+  lane: number,
+  nowMs: number,
+  accept: (n: PlayNote) => boolean,
+): { note: PlayNote; delta: number } | null {
   let best: PlayNote | null = null;
   let bestDelta = Infinity;
   for (const n of notes) {
     if (n.timeMs - nowMs > JUDGE_WINDOWS.good) break;
-    if (n.state !== 0 || n.lane !== lane) continue;
+    if (n.state !== 0 || n.lane !== lane || !accept(n)) continue;
     const d = Math.abs(n.timeMs - nowMs);
     if (d < bestDelta) {
       best = n;
       bestDelta = d;
     }
   }
-  if (!best) return null;
-  const judge = judgeFor(bestDelta);
-  return judge ? { note: best, judge } : null;
+  return best ? { note: best, delta: bestDelta } : null;
+}
+
+/**
+ * タップしたレーンで、いちばん近い未判定ノーツを探す。
+ * 判定窓の外なら null。フリックノーツはタップでは取れないので対象外にする。
+ */
+export function findHit(notes: PlayNote[], lane: number, nowMs: number): { note: PlayNote; judge: Exclude<Judge, 'miss'> } | null {
+  const found = closestPending(notes, lane, nowMs, (n) => !n.flick);
+  if (!found) return null;
+  const judge = judgeFor(found.delta);
+  return judge ? { note: found.note, judge } : null;
+}
+
+/**
+ * フリックしたレーンで取るノーツを探す。フリックノーツを最優先し、
+ * 無ければ通常のタップノーツ（長押しの頭は対象にしない）を取る。
+ * 判定窓の外なら null。
+ */
+export function findFlickHit(notes: PlayNote[], lane: number, nowMs: number): { note: PlayNote; judge: Exclude<Judge, 'miss'> } | null {
+  const flick = closestPending(notes, lane, nowMs, (n) => n.flick);
+  if (flick) {
+    const judge = judgeFor(flick.delta);
+    return judge ? { note: flick.note, judge } : null;
+  }
+  const tap = closestPending(notes, lane, nowMs, (n) => !n.flick && n.holdMs === 0);
+  if (!tap) return null;
+  const judge = judgeFor(tap.delta);
+  return judge ? { note: tap.note, judge } : null;
+}
+
+/**
+ * レーン内の判定窓にある未判定ノーツのうち、いちばん近いもの（種別は問わない）。
+ * 「最寄りがフリックノーツならタップ入力を無効にする」判定に使う。窓の外なら null。
+ */
+export function findNearestNote(notes: PlayNote[], lane: number, nowMs: number): PlayNote | null {
+  const found = closestPending(notes, lane, nowMs, () => true);
+  if (!found) return null;
+  return judgeFor(found.delta) ? found.note : null;
 }
 
 /** 判定窓を過ぎた未判定ノーツをミスにする。ミスにした数を返す */
@@ -507,7 +583,12 @@ export function validateCharts(song: SongData): string[] {
     // 長押しの検証: 尾の余裕、同じレーンのノーツが帯の中に入らないこと、長押し同士の重なり
     const holds = notes.filter((n) => (n[2] ?? 0) > 0);
     for (const n of notes) {
-      if (n[2] !== undefined && n[2] <= 0) errors.push(`${diff}: 長押しの長さが不正です (${n[0]}ms)`);
+      if (n[3] === 'flick') {
+        // フリックノーツは長押しを持たない（JSON では [t, lane, 0, "flick"] と書く）
+        if ((n[2] ?? 0) > 0) errors.push(`${diff}: フリックノーツに長押しが付いています (${n[0]}ms)`);
+      } else if (n[2] !== undefined && n[2] <= 0) {
+        errors.push(`${diff}: 長押しの長さが不正です (${n[0]}ms)`);
+      }
     }
     for (const [t, lane, hold] of holds) {
       const tail = t + (hold ?? 0);

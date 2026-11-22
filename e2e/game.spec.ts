@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 
 // リズムゲーム（デジタルCDエンジンのモジュール）の E2E。CD 側の画面遷移（data-view）と
@@ -435,4 +436,50 @@ test('広い画面ではプレイ画面がスマホ比率のステージにな�
   });
   expect(lyric.relTop).toBeGreaterThanOrEqual(lyric.stageWidth);
   expect(lyric.relTop).toBeLessThan(lyric.stageHeight * 0.82);
+});
+
+test('フリックノーツは上フリックで取れる（タップでは取れない）', async ({ page }) => {
+  test.setTimeout(90_000);
+  // 既定の曲・難易度（warae / easy）の最初のフリックノーツを譜面から読む
+  const charts = JSON.parse(readFileSync(new URL('../src/game/data/charts.json', import.meta.url), 'utf8')) as Record<
+    string,
+    { charts: Record<string, [number, number, number?, string?][]> }
+  >;
+  const firstFlick = charts['warae'].charts['easy'].find((n) => n[3] === 'flick');
+  expect(firstFlick).toBeDefined();
+  const [flickMs, flickLane] = firstFlick!;
+
+  // テスト用の入口（getGameState）を使うため ?debug=1 で開き直す
+  await page.goto('/?debug=1');
+  await page.locator('#btn-open-game').click();
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+
+  const songMs = (): Promise<number> =>
+    page.evaluate(() => {
+      const api = (window as unknown as { __pwaTest?: { getGameState?: () => { songMs: number } } }).__pwaTest;
+      return api?.getGameState?.().songMs ?? -1;
+    });
+  // フリックノーツの少し手前まで曲位置を待つ（判定窓 ±160ms の内側でジェスチャする）
+  for (;;) {
+    const ms = await songMs();
+    if (ms >= flickMs - 100) break;
+    await page.waitForTimeout(30);
+  }
+  // 押し始め→上へ 70px 動かす→離す、を1回の evaluate で同期的に流す
+  await page.evaluate(
+    ({ lane }) => {
+      const canvas = document.querySelector('#game-canvas') as HTMLCanvasElement;
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + (rect.width * (lane + 0.5)) / 4;
+      const y = rect.top + rect.height * 0.82;
+      const init = { pointerId: 7, bubbles: true };
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { ...init, clientX: x, clientY: y }));
+      canvas.dispatchEvent(new PointerEvent('pointermove', { ...init, clientX: x, clientY: y - 70 }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, clientX: x, clientY: y - 70 }));
+    },
+    { lane: flickLane },
+  );
+  // フリックで取れていればスコアが入る（タップだけでは取れないノーツ）
+  await expect(page.locator('body')).not.toHaveAttribute('data-score', '0', { timeout: 5_000 });
 });
