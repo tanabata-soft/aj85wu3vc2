@@ -940,6 +940,20 @@
   box-shadow: 0 0 18px rgb(255 209 102 / 0.45);
 }
 
+/* ハイスコア更新の印。フルコンボ（金）と並んでも見分けられるよう、色はアクセント（水色）で形は同じピルにする */
+#view-game .result .newrecord-badge {
+  display: inline-block;
+  margin: 2px 0 6px;
+  padding: 4px 16px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #06222e;
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  box-shadow: 0 0 18px rgb(57 208 255 / 0.45);
+}
+
 /* オートプレイで演奏した回の印（ベストスコアに残らないことを見せる） */#view-game .result .autoplay-badge {
   display: inline-block;
   margin: 2px 0 6px;

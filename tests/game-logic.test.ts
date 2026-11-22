@@ -18,6 +18,7 @@ import {
   LATENCY_DROP_COUNT,
   LATENCY_TAP_COUNT,
   latencyStats,
+  isNewBest,
   makePlayNotes,
   rankFor,
   RANK_THRESHOLDS,
@@ -261,6 +262,27 @@ describe('rankFor / RANK_THRESHOLDS（ランクの境目）', () => {
     expect(rankFor(70)).toBe('B');
     expect(rankFor(69.9)).toBe('C');
     expect(rankFor(0)).toBe('C');
+  });
+});
+
+describe('isNewBest（ハイスコア更新の判定）', () => {
+  it('保存済みベストを上回ったら更新', () => {
+    expect(isNewBest(5000, 5001)).toBe(true);
+    expect(isNewBest(5000, 6000)).toBe(true);
+  });
+
+  it('同点・下回ったら更新ではない', () => {
+    expect(isNewBest(5000, 5000)).toBe(false);
+    expect(isNewBest(5000, 4999)).toBe(false);
+  });
+
+  it('初回プレイ（ベスト未保存）は、ベストが作られる回として更新に含める', () => {
+    expect(isNewBest(undefined, 1000)).toBe(true);
+  });
+
+  it('スコア 0 は更新にしない（何も叩かずに終わった回）', () => {
+    expect(isNewBest(undefined, 0)).toBe(false);
+    expect(isNewBest(0, 0)).toBe(false);
   });
 });
 

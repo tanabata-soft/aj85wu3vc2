@@ -13,6 +13,7 @@ SPEED_STEP,
 clampOffset,
 clampSpeed,
 isFullCombo,
+isNewBest,
 normalizeTouchPosition,
 type ComboAppearance,
 type Difficulty,
@@ -34,7 +35,7 @@ import {
   type DebugAction,
 } from '../debug';
 import { detectPlatform } from '../install';
-import { isSoundOn, playGameOverSound, playResultJingle, playSwipeSound, playUiClick, preloadFlickSample, preloadGameOverSound, preloadHitSample, preloadResultJingle, setSound } from './sound';
+import { isSoundOn, playGameOverSound, playResultJingle, playResultVoices, playSwipeSound, playUiClick, preloadFlickSample, preloadGameOverSound, preloadHitSample, preloadResultJingle, preloadResultVoices, setSound, type ResultVoice } from './sound';
 import { isVibrateOn, setVibrate } from './haptics';
 import { audioContext, audioState, isUnlocked, unlockAudio } from './audio';
 import { load, migrateStorage, requestPersist, save } from './storage';
@@ -674,6 +675,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     preloadResultJingle();
     // ゲームオーバー音の素材も先読みしておく（確定の瞬間に鳴らし始めるため）
     preloadGameOverSound();
+    // 結果ボイスの素材も先読みしておく（結果表示の瞬間に鳴らし始めるため）
+    preloadResultVoices();
     const entry = songById(selectedSong);
     lastEntry = entry;
     lastDiff = selectedDiff;
@@ -707,13 +710,18 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       bests[key] = { score: best, rank: result.rank };
       save('best', bests);
     }
+    // ハイスコア更新（保存済みベストを上回った回だけ。初回プレイでベストが
+    // 作られる回も含む。オートプレイ・失敗の回はベストを更新しないので対象外）
+    const newRecord = !result.autoplay && !result.failed && isNewBest(prev?.score, result.score);
+    const fullCombo = !result.failed && isFullCombo(result.counts);
     $('result-rank').textContent = result.rank;
     // ゲームオーバーの回はランクを出さない（オーナー指示 2026-11-22「ゲームオーバーはランクなしでいい」）
     $('result-rank').hidden = result.failed;
     $('result-gameover').hidden = !result.failed;
     $('result-autoplay').hidden = !result.autoplay;
     // 失敗の回にフルコンボの印は出さない（全 GOOD でも GOOD の −1 が積もればライフは尽きうる）
-    $('result-fullcombo').hidden = result.failed || !isFullCombo(result.counts);
+    $('result-fullcombo').hidden = !fullCombo;
+    $('result-newrecord').hidden = !newRecord;
     $('result-song').textContent = `${result.songTitle}（${DIFFICULTIES[lastDiff].label}）`;
     $('result-score').textContent = String(result.score);
     $('result-best').textContent = String(best);
@@ -725,9 +733,18 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     // 読み上げも、ゲームオーバーの回はランクを読み上げない（「ゲームオーバー」＋成績の形）
     $('game-live').textContent = result.failed
       ? `結果: ゲームオーバー、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${result.autoplay ? '（オートプレイ）' : ''}`
-      : `結果: ランク${result.rank}、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${isFullCombo(result.counts) ? '、フルコンボ' : ''}${result.autoplay ? '（オートプレイ）' : ''}`;
+      : `結果: ランク${result.rank}、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${fullCombo ? '、フルコンボ' : ''}${newRecord ? '、ハイスコア更新' : ''}${result.autoplay ? '（オートプレイ）' : ''}`;
     show('result');
     renderMenu();
+    // 達成ボイスは結果カードが出た瞬間に鳴らす（ジングルの頭は表示待ちの間に
+    // 鳴り終わっている。両方達成なら フルコンボ→ハイスコア更新 の順に続ける。
+    // ゲームオーバーの回はどちらも鳴らさない）
+    if (!result.failed) {
+      const voices: ResultVoice[] = [];
+      if (fullCombo) voices.push('fullcombo');
+      if (newRecord) voices.push('newrecord');
+      playResultVoices(voices);
+    }
   }
   $('again-button').addEventListener('click', () => {
     selectedSong = lastEntry.id;

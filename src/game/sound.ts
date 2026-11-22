@@ -4,7 +4,8 @@
 // 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 に合成から差し替え）と、
 // フリック音のサンプル音源（オーナーが試聴プレビューから選んだ音源そのもの。
 // 2026-11-22 に合成から差し替え。下記のフリック音の節を参照）と、
-// ゲームオーバー音（オーナー提供の音源ファイル。2026-11-22 に追加）。
+// ゲームオーバー音（オーナー提供の音源ファイル。2026-11-22 に追加）と、
+// 結果画面の達成ボイス（Gemini TTS 生成の音声ファイル。2026-11-22 に追加）。
 // 音は、曲の再生と同じ AudioContext（src/audio.ts）を使う。
 //
 // ヒット音は「サンプル音源方式」: src/assets/hit-sample.wav（テンプレート付属の
@@ -32,6 +33,8 @@ import hitSampleUrl from './assets/hit-sample.wav';
 import flickSampleUrl from './assets/flick-sample.wav';
 import resultJingleUrl from './assets/result-jingle.mp3';
 import gameOverUrl from './assets/game-over.mp3';
+import voiceFullComboUrl from './assets/voice-fullcombo.mp3';
+import voiceNewRecordUrl from './assets/voice-newrecord.mp3';
 
 export type HitJudge = Exclude<Judge, 'miss'>;
 
@@ -606,6 +609,68 @@ export function playGameOverSound(): number {
     return GAME_OVER_WAIT_MS;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * 結果画面の達成ボイス（オーナー指示 2026-11-22 で追加）。
+ * 「フルコンボ！」と「ハイスコア更新！」の2フレーズで、素材は Gemini TTS
+ * （gemini-3.8-flash-tts、声 Leda）で生成した音声を MP3 192kbps 化し、
+ * ジングルと同水準（約 −13 LUFS）にそろえた src/game/assets/voice-*.mp3。
+ * ジングル・ゲームオーバー音と同じ方式: ビルドで dist に出力され Service
+ * Worker の precache に入り、演奏開始時に先読みする。
+ *
+ * 鳴らすタイミング: 結果カードが出る瞬間（ジングルの頭の部分はカード表示の
+ * 待ち時間で鳴り終わっており、残りの尾と重なる形。結果表示と合わせて鳴る
+ * ジングル素材の設計と同じ考え方）。両方達成したときは、フルコンボ→
+ * ハイスコア更新の順に、前のフレーズが終わってから次を続けて鳴らす。
+ * 効果音のオン/オフ設定に従う（隣で鳴るジングルと同じ扱い。オフなら無音で、
+ * 結果カードの印だけが出る）。ゲームオーバーの結果では鳴らさない。
+ */
+
+/** 結果ボイスの種類（結果カードの印と対応する） */
+export type ResultVoice = 'fullcombo' | 'newrecord';
+
+const RESULT_VOICE_URLS: Record<ResultVoice, string> = {
+  fullcombo: voiceFullComboUrl,
+  newrecord: voiceNewRecordUrl,
+};
+
+/** 続けて鳴らすときの、フレーズ間の間（秒） */
+const RESULT_VOICE_GAP_SEC = 0.15;
+
+/** 演奏開始のときに結果ボイス素材を先読みしておく（結果表示で読み込み待ちにならないように） */
+export function preloadResultVoices(): void {
+  for (const url of Object.values(RESULT_VOICE_URLS)) {
+    void loadBuffer(url).catch(() => undefined);
+  }
+}
+
+/**
+ * 結果ボイスを、渡された順に続けて鳴らす。効果音オフのときは何もしない。
+ * 素材の読み込み・デコードに失敗しても、結果表示の流れは止めない。
+ * 鳴らし始めは app:sound（kind: 'voice-fullcombo' / 'voice-newrecord'）でも出す。
+ */
+export function playResultVoices(voices: ResultVoice[]): void {
+  if (!enabled || voices.length === 0) return;
+  try {
+    const ac = audioContext();
+    void ac.resume();
+    void (async () => {
+      let at = ac.currentTime;
+      for (const voice of voices) {
+        const buf = await loadBuffer(RESULT_VOICE_URLS[voice]).catch(() => undefined);
+        if (!buf) continue;
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        src.connect(hitBus());
+        src.start(Math.max(at, ac.currentTime));
+        document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: `voice-${voice}` } }));
+        at = Math.max(at, ac.currentTime) + buf.duration + RESULT_VOICE_GAP_SEC;
+      }
+    })();
+  } catch {
+    // 音が出せなくても続行する
   }
 }
 

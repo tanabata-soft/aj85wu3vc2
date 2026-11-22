@@ -355,6 +355,106 @@ test('演奏が終わるとジングルが鳴ってから結果が出る', async
   // 通常の結果ではランクが出る（ゲームオーバーの回だけ出さない）
   await expect(page.locator('#result-rank')).toBeVisible();
   await expect(page.locator('#result-rank')).toHaveText('C');
+  // 何も叩いていない回は、フルコンボの印もハイスコア更新の印も出ない
+  await expect(page.locator('#result-fullcombo')).toBeHidden();
+  await expect(page.locator('#result-newrecord')).toBeHidden();
+});
+
+test('フルコンボでハイスコアも更新すると、印が両方出てボイスが続けて鳴る', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto('/?debug=1');
+  await expect(page.locator('#view-cover')).toBeVisible();
+  await page.locator('#btn-open-game').click();
+  // 達成ボイスが鳴った順序を記録する
+  await page.evaluate(() => {
+    const w = window as unknown as { __voices: string[] };
+    w.__voices = [];
+    document.addEventListener('app:sound', (e) => {
+      const kind = (e as CustomEvent).detail?.kind as string | undefined;
+      if (kind === 'voice-fullcombo' || kind === 'voice-newrecord') w.__voices.push(kind);
+    });
+  });
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  const songMs = (): Promise<number> =>
+    page.evaluate(() => {
+      const api = (window as unknown as { __pwaTest?: { getGameState?: () => { songMs: number } } }).__pwaTest;
+      return api?.getGameState?.().songMs ?? -1;
+    });
+  // 既定の曲・難易度（warae / easy）の最初のノーツ（4528ms・レーン2）を譜面から読む
+  const charts = JSON.parse(readFileSync(new URL('../src/game/data/charts.json', import.meta.url), 'utf8')) as Record<
+    string,
+    { charts: Record<string, [number, number, number?, string?][]> }
+  >;
+  const [firstMs, firstLane] = charts['warae'].charts['easy'][0];
+  // ノーツの少し手前まで曲位置を待って、そのレーンのキー（D/F/J/K）を押す
+  for (;;) {
+    const ms = await songMs();
+    if (ms >= firstMs - 80) break;
+    await page.waitForTimeout(30);
+  }
+  await page.evaluate(
+    ({ key }) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+    },
+    { key: 'dfjk'[firstLane] },
+  );
+  await expect(page.locator('body')).not.toHaveAttribute('data-score', '0', { timeout: 5_000 });
+  // 1ノーツ取った時点（ミス0）で結果へ進む：フルコンボ＋初回ベスト＝ハイスコア更新
+  await page.evaluate(() => {
+    const api = (window as unknown as { __pwaTest?: { finishNow?: () => void } }).__pwaTest;
+    api?.finishNow?.();
+  });
+  await expect(page.locator('#result-screen')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('#result-fullcombo')).toBeVisible();
+  await expect(page.locator('#result-fullcombo')).toHaveText('FULL COMBO!');
+  await expect(page.locator('#result-newrecord')).toBeVisible();
+  await expect(page.locator('#result-newrecord')).toHaveText('ハイスコア更新！');
+  await expect(page.locator('#game-live')).toContainText('ハイスコア更新');
+  // ベストスコアは今回のスコアで作られている
+  await expect(page.locator('#result-best')).toHaveText(await page.locator('#result-score').innerText());
+  // ボイスは フルコンボ→ハイスコア更新 の順に続けて鳴る
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __voices: string[] }).__voices))
+    .toEqual(['voice-fullcombo', 'voice-newrecord']);
+});
+
+test('オートプレイのフルコンボでは印とボイスは出るが、ハイスコア更新は出ない', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto('/?debug=1');
+  await expect(page.locator('#view-cover')).toBeVisible();
+  await page.locator('#btn-open-game').click();
+  await expect(page.locator('#menu-screen')).toBeVisible();
+  await page.evaluate(() => {
+    const w = window as unknown as { __voices: string[] };
+    w.__voices = [];
+    document.addEventListener('app:sound', (e) => {
+      const kind = (e as CustomEvent).detail?.kind as string | undefined;
+      if (kind === 'voice-fullcombo' || kind === 'voice-newrecord') w.__voices.push(kind);
+    });
+    // デバッグモード＋オートプレイをテスト API で有効化する（オートプレイは
+    // デバッグモードでのみ効く。撮影スクリプトと同じ作法）
+    const api = (window as unknown as { __pwaTest?: { setGameState?: (p: Record<string, unknown>) => void } }).__pwaTest;
+    api?.setGameState?.({ debugMode: true, autoplay: true });
+  });
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  // オートプレイが数ノーツ取るまで待ってから結果へ進む（全 PERFECT・ミス0）
+  await expect(page.locator('body')).not.toHaveAttribute('data-score', '0', { timeout: 30_000 });
+  await page.waitForTimeout(2_000);
+  await page.evaluate(() => {
+    const api = (window as unknown as { __pwaTest?: { finishNow?: () => void } }).__pwaTest;
+    api?.finishNow?.();
+  });
+  await expect(page.locator('#result-screen')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('#result-autoplay')).toBeVisible();
+  await expect(page.locator('#result-fullcombo')).toBeVisible();
+  // オートプレイの結果はベストに残らないので、ハイスコア更新の印は出ない
+  await expect(page.locator('#result-newrecord')).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __voices: string[] }).__voices))
+    .toEqual(['voice-fullcombo']);
 });
 
 test('次の曲の読み込み中に、前の曲の歌詞が残らない', async ({ page }) => {
@@ -634,12 +734,15 @@ test('広い画面ではプレイ画面がスマホ比率のステージにな�
 test('ノーツを逃し続けると、ライフが尽きてゲームオーバーになる', async ({ page }) => {
   test.setTimeout(120_000);
   await page.locator('#btn-open-game').click();
-  // ゲームオーバー音が鳴ったことを記録する
+  // ゲームオーバー音が鳴ったことと、達成ボイスが鳴らなかったことを記録する
   await page.evaluate(() => {
-    const w = window as unknown as { __gameOverSound: boolean };
+    const w = window as unknown as { __gameOverSound: boolean; __voices: string[] };
     w.__gameOverSound = false;
+    w.__voices = [];
     document.addEventListener('app:sound', (e) => {
-      if ((e as CustomEvent).detail?.kind === 'gameover') w.__gameOverSound = true;
+      const kind = (e as CustomEvent).detail?.kind as string | undefined;
+      if (kind === 'gameover') w.__gameOverSound = true;
+      if (kind === 'voice-fullcombo' || kind === 'voice-newrecord') w.__voices.push(kind);
     });
   });
   await page.locator('#start-button').click();
@@ -656,6 +759,12 @@ test('ノーツを逃し続けると、ライフが尽きてゲームオーバ�
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { __gameOverSound: boolean }).__gameOverSound))
     .toBe(true);
+  // ゲームオーバーの回は、フルコンボ・ハイスコア更新の印もボイスも出ない
+  await expect(page.locator('#result-fullcombo')).toBeHidden();
+  await expect(page.locator('#result-newrecord')).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __voices: string[] }).__voices))
+    .toEqual([]);
   // 失敗の回は、途中までの成績（精度 0.0%）が出て、「次の曲」は出ない
   await expect(page.locator('#result-accuracy')).toHaveText('0.0');
   await expect(page.locator('#next-button')).toBeHidden();

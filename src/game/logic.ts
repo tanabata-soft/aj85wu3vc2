@@ -213,6 +213,18 @@ export function isFullCombo(counts: JudgementCounts): boolean {
   return counts.miss === 0 && totalNotes(counts) > 0;
 }
 
+/**
+ * ハイスコア更新か（保存済みベストを上回ったか）。
+ * 初回プレイ（ベスト未保存＝undefined）は、ベストが新たに作られる回なので
+ * 「更新」に含める（ベスト保存の条件＝前回ベスト以上、と対になる考え方。
+ * ただし同点は更新にしない：上回ったときだけ印とボイスを出す）。
+ * スコア 0 は更新にしない（何も叩かずに終わった回で印を出さないため）。
+ * オートプレイ・失敗の回はベスト自体を更新しないので、呼び出し側で除外する。
+ */
+export function isNewBest(prevScore: number | undefined, score: number): boolean {
+  return score > 0 && score > (prevScore ?? 0);
+}
+
 /** ランクの境目（精度 %）。C は最低ランクなので境目を持たない */
 export const RANK_THRESHOLDS: Record<Exclude<Rank, 'C'>, number> = { S: 95, A: 85, B: 70 };
 
