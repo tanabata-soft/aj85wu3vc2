@@ -6,7 +6,11 @@ import {
   findHit,
   findNearestNote,
   makePlayNotes,
+  rankFor,
+  rankMeterState,
+  RANK_THRESHOLDS,
   validateCharts,
+  type JudgementCounts,
   type NoteData,
   type SongData,
 } from '../src/game/logic';
@@ -177,5 +181,66 @@ describe('速度調整（clampSpeed / effectiveFallSeconds）', () => {
     expect(effectiveFallSeconds(2.0, 2.0)).toBe(1.0);
     expect(effectiveFallSeconds(1.6, 0.8)).toBe(2.0);
     expect(effectiveFallSeconds(1.3, 1.3)).toBe(1.0);
+  });
+});
+
+describe('rankFor / RANK_THRESHOLDS（ランクの境目）', () => {
+  it('境目は S=95 / A=85 / B=70 で、ちょうど境目なら上のランク', () => {
+    expect(RANK_THRESHOLDS).toEqual({ S: 95, A: 85, B: 70 });
+    expect(rankFor(95)).toBe('S');
+    expect(rankFor(85)).toBe('A');
+    expect(rankFor(70)).toBe('B');
+    expect(rankFor(69.9)).toBe('C');
+    expect(rankFor(0)).toBe('C');
+  });
+});
+
+describe('rankMeterState（演奏中のランクメーター）', () => {
+  const counts = (p: Partial<JudgementCounts>): JudgementCounts => ({ perfect: 0, great: 0, good: 0, miss: 0, ...p });
+
+  it('判定がまだ無いときは精度 0・ランク C・次は B まで 70', () => {
+    const st = rankMeterState(counts({}));
+    expect(st.judged).toBe(0);
+    expect(st.accuracy).toBe(0);
+    expect(st.rank).toBe('C');
+    expect(st.nextRank).toBe('B');
+    expect(st.toNext).toBeCloseTo(70);
+  });
+
+  it('全 PERFECT なら S で、次のランクは無い', () => {
+    const st = rankMeterState(counts({ perfect: 10 }));
+    expect(st.judged).toBe(10);
+    expect(st.accuracy).toBeCloseTo(100);
+    expect(st.rank).toBe('S');
+    expect(st.nextRank).toBeNull();
+    expect(st.toNext).toBe(0);
+  });
+
+  it('精度は結果画面と同じ重み（GREAT×0.7 / GOOD×0.4）で、判定済みノーツが分母', () => {
+    // (8 + 2×0.7) / 10 = 94% → A、S まであと 1
+    const st = rankMeterState(counts({ perfect: 8, great: 2 }));
+    expect(st.accuracy).toBeCloseTo(94);
+    expect(st.rank).toBe('A');
+    expect(st.nextRank).toBe('S');
+    expect(st.toNext).toBeCloseTo(1);
+  });
+
+  it('ミスは分母に入り分子には入らない（B 帯の例）', () => {
+    // (7 + 0.7) / 10 = 77% → B、A まであと 8
+    const st = rankMeterState(counts({ perfect: 7, great: 1, miss: 2 }));
+    expect(st.judged).toBe(10);
+    expect(st.accuracy).toBeCloseTo(77);
+    expect(st.rank).toBe('B');
+    expect(st.nextRank).toBe('A');
+    expect(st.toNext).toBeCloseTo(8);
+  });
+
+  it('GOOD の重み 0.4 が効く（C 帯の例）', () => {
+    // (5 + 4×0.4) / 10 = 66% → C、B まであと 4
+    const st = rankMeterState(counts({ perfect: 5, good: 4, miss: 1 }));
+    expect(st.accuracy).toBeCloseTo(66);
+    expect(st.rank).toBe('C');
+    expect(st.nextRank).toBe('B');
+    expect(st.toNext).toBeCloseTo(4);
   });
 });

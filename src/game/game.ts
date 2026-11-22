@@ -25,6 +25,8 @@ import {
   lyricIndexAt,
   makePlayNotes,
   rankFor,
+  rankMeterState,
+  RANK_THRESHOLDS,
   accuracy,
   releaseHold,
   repressHold,
@@ -81,6 +83,11 @@ const RESUME_COUNTDOWN_MS = 1000;
 const JUDGE_LABEL: Record<Judge, string> = { perfect: 'PERFECT', great: 'GREAT', good: 'GOOD', miss: 'MISS' };
 const JUDGE_COLOR: Record<Judge, string> = { perfect: '#ffd166', great: '#4ecdc4', good: '#9aa8ff', miss: '#ff6b6b' };
 const GOLD = '#ffd166';
+
+/** ランク帯の色（オーナー承認済みのモックどおり: C=グレー / B=ブロンズ / A=青 / S=金） */
+const RANK_COLORS: Record<Rank, string> = { C: '#c8ccd4', B: '#c98a4b', A: '#7fb2d9', S: '#f2c14e' };
+/** ランクメーターの置き場所（上段の中断ボタン・スコアの下、2段目）。座標はステージ内 */
+const RANK_METER = { panelX: 6, panelY: 54, panelH: 50, badgeX: 14, badgeY: 59, badgeSize: 40, meterY: 67, meterH: 15, rightW: 88 };
 
 /** コンボ段階ごとのベール（暗幕）の濃さ。段階が上がるほど薄くなり、ジャケットが冴える */
 const TIER_VEIL_ALPHA = [0.62, 0.57, 0.52, 0.46, 0.4] as const;
@@ -1028,6 +1035,82 @@ export class Game {
     });
   }
 
+  /**
+   * ランクメーター（演奏画面の上部2段目に常時表示。オーナー指示 2026-11-22「スコアのメーター表示して／ランクがわかるやつ」）。
+   * 左に現在のランク文字のバッジ、中央に精度で伸びる帯（ランク帯で色分けし境目のラベル付き）、
+   * 右に現在精度と「次のランクまであと◯.◯」。精度は結果画面と同じく accuracy(counts) で、
+   * 演奏中は判定済みノーツに対する現在値になる。
+   * 判定がまだ無い開始直後は、精度を「—」にして帯は空・バッジは C で出す。
+   */
+  private drawRankMeter(g: CanvasRenderingContext2D, W: number): void {
+    const st = rankMeterState(this.counts);
+    const M = RANK_METER;
+    // 背景パネル（中断ボタンと同じ半透明の暗色。落ちてくるノーツの上でも読めるように）
+    g.fillStyle = 'rgba(6,8,16,.35)';
+    g.beginPath();
+    g.roundRect(M.panelX, M.panelY, W - M.panelX * 2, M.panelH, 12);
+    g.fill();
+
+    // ランクバッジ
+    g.fillStyle = RANK_COLORS[st.rank];
+    g.beginPath();
+    g.roundRect(M.badgeX, M.badgeY, M.badgeSize, M.badgeSize, 10);
+    g.fill();
+    g.fillStyle = '#10131c';
+    g.font = 'bold 24px sans-serif';
+    g.textAlign = 'center';
+    g.fillText(st.rank, M.badgeX + M.badgeSize / 2, M.badgeY + 29);
+
+    // 帯メーター: ランク帯の色分け＋現在精度までの明るいフィル＋針
+    const mx = M.badgeX + M.badgeSize + 10;
+    const mw = W - M.rightW - mx - 6;
+    const zones: { from: number; to: number; rank: Rank }[] = [
+      { from: 0, to: RANK_THRESHOLDS.B, rank: 'C' },
+      { from: RANK_THRESHOLDS.B, to: RANK_THRESHOLDS.A, rank: 'B' },
+      { from: RANK_THRESHOLDS.A, to: RANK_THRESHOLDS.S, rank: 'A' },
+      { from: RANK_THRESHOLDS.S, to: 100, rank: 'S' },
+    ];
+    const xAt = (acc: number): number => mx + (mw * Math.max(0, Math.min(100, acc))) / 100;
+    g.save();
+    g.beginPath();
+    g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
+    g.clip();
+    for (const z of zones) {
+      g.fillStyle = RANK_COLORS[z.rank];
+      g.globalAlpha = 0.45;
+      g.fillRect(xAt(z.from), M.meterY, xAt(z.to) - xAt(z.from), M.meterH);
+    }
+    g.globalAlpha = 1;
+    if (st.judged > 0) {
+      g.fillStyle = 'rgba(255,255,255,.30)';
+      g.fillRect(mx, M.meterY, xAt(st.accuracy) - mx, M.meterH);
+    }
+    g.restore();
+    if (st.judged > 0) {
+      g.fillStyle = '#fff';
+      g.fillRect(xAt(st.accuracy) - 1.5, M.meterY - 2, 3, M.meterH + 4);
+    }
+    // 境目のラベル（B 70 / A 85 / S 95）
+    g.font = '10px sans-serif';
+    g.fillStyle = 'rgba(255,255,255,.55)';
+    g.textAlign = 'center';
+    for (const z of zones.slice(1)) {
+      g.fillText(`${z.rank} ${z.from}`, xAt(z.from), M.meterY + M.meterH + 13);
+    }
+
+    // 右ブロック: 現在精度と次のランクまで
+    g.textAlign = 'right';
+    g.fillStyle = '#fff';
+    g.font = 'bold 16px sans-serif';
+    g.fillText(st.judged > 0 ? `${st.accuracy.toFixed(1)}%` : '—', W - 12, M.meterY + 13);
+    if (st.judged > 0) {
+      g.font = '10px sans-serif';
+      g.fillStyle = 'rgba(255,255,255,.6)';
+      g.fillText(st.nextRank === null ? '最高ランク' : `${st.nextRank}まで あと${st.toNext.toFixed(1)}`, W - 12, M.meterY + M.meterH + 13);
+    }
+    g.textAlign = 'left';
+  }
+
   private fit(): void {
     const d = window.devicePixelRatio || 1;
     const w = this.canvas.clientWidth;
@@ -1518,6 +1601,7 @@ export class Game {
     g.fillRect(0, 0, W, 3);
     g.fillStyle = GOLD;
     g.fillRect(0, 0, W * Math.max(0, Math.min(1, nowSec / this.durationSec)), 3);
+    this.drawRankMeter(g, W);
 
     if ((nowMs > this.durationSec * 1000 + 500 && this.notes.every((n) => n.state !== 0)) || nowMs > this.durationSec * 1000 + 2000) {
       this.finish();
