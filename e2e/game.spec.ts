@@ -374,6 +374,39 @@ test('中断確認の「つづける」で、止めた位置から再開する',
   await expect.poll(songMs, { timeout: 5_000 }).toBeGreaterThan(frozen);
 });
 
+test('中断確認の「はじめからやりなおす」で、同じ曲を頭から開始し直す', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto('/?debug=1');
+  await expect(page.locator('#view-cover')).toBeVisible();
+  await page.locator('#btn-open-game').click();
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  const state = (): Promise<{ songMs: number; life: number; song: string }> =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __pwaTest: { getGameState: () => { songMs: number; life: number; song: string } } })
+          .__pwaTest.getGameState(),
+    );
+  // 曲が進み、ミスでライフが減った状態にする
+  await expect.poll(async () => (await state()).songMs, { timeout: 30_000 }).toBeGreaterThan(300);
+  await expect.poll(async () => (await state()).life, { timeout: 30_000 }).toBeLessThan(100);
+  const songBefore = (await state()).song;
+  // 中断してカードを出す。リトライボタンが見えていること
+  await page.locator('#game-canvas').dispatchEvent('pointerdown', { clientX: 30, clientY: 29 });
+  await expect(page.locator('#pause-screen')).toBeVisible();
+  await expect(page.locator('#pause-retry-button')).toBeVisible();
+  const frozen = (await state()).songMs;
+  expect(frozen).toBeGreaterThan(300);
+  // リトライ: 確認なしでカードが閉じ、同じ曲のまま頭から演奏が始まる
+  await page.locator('#pause-retry-button').click();
+  await expect(page.locator('#pause-screen')).toBeHidden();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 10_000 });
+  // 状態がリセットされる: ライフは満タン、曲位置は凍結位置より手前に戻る
+  await expect.poll(async () => (await state()).life, { timeout: 10_000 }).toBe(100);
+  await expect.poll(async () => (await state()).songMs, { timeout: 10_000 }).toBeLessThan(frozen);
+  expect((await state()).song).toBe(songBefore);
+});
+
 test('アプリ切替（画面が隠れる）と中断確認が出て、演奏は進まない', async ({ page }) => {
   await page.locator('#btn-open-game').click();
   await page.locator('#start-button').click();
