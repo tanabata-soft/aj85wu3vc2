@@ -86,8 +86,12 @@ test('タッチ位置を「上」に変えると判定ラインが上がり、�
   await page.locator('#btn-open-game').click();
 
   // 判定ラインの位置: Canvas の中で「ほぼ白い横帯」が最も広い行の高さ比率を測る。
-  // 判定ラインは幅いっぱいに引かれる白線なので、その行が比率として返る
-  const lineRatio = (): Promise<number> =>
+  // 判定ラインは幅いっぱいに引かれる白線なので、その行が比率として返る。
+  // ただし開始直後は、地の色で消された Canvas に最初のフレームがまだ描かれて
+  // いない瞬間があり、そのときは明るい画素が1つも見つからない（bestY = -1）。
+  // CI の並行負荷下で実際にこの瞬間を掴んで失敗したため、1回の実測は信じず、
+  // 白線の行（明るい画素の割合が 0.9 以上）が見つかるまでポーリングしてから測る
+  const measureLine = (): Promise<{ ratio: number; frac: number }> =>
     page.evaluate(() => {
       const c = document.getElementById('game-canvas') as HTMLCanvasElement;
       const t = document.createElement('canvas');
@@ -112,8 +116,22 @@ test('タッチ位置を「上」に変えると判定ラインが上がり、�
           bestY = y;
         }
       }
-      return bestY / c.height;
+      return { ratio: bestY / c.height, frac: best };
     });
+  const lineRatio = async (): Promise<number> => {
+    let ratio = -1;
+    await expect
+      .poll(
+        async () => {
+          const m = await measureLine();
+          if (m.frac >= 0.9) ratio = m.ratio;
+          return m.frac;
+        },
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThanOrEqual(0.9);
+    return ratio;
+  };
 
   // 既定（標準）では判定ラインは H×0.82
   await page.locator('#start-button').click();
