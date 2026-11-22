@@ -438,6 +438,39 @@ test('広い画面ではプレイ画面がスマホ比率のステージにな�
   expect(lyric.relTop).toBeLessThan(lyric.stageHeight * 0.82);
 });
 
+test('ノーツを逃し続けると、猶予明けにゲームオーバーになる', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.locator('#btn-open-game').click();
+  // ゲームオーバー音が鳴ったことを記録する
+  await page.evaluate(() => {
+    const w = window as unknown as { __gameOverSound: boolean };
+    w.__gameOverSound = false;
+    document.addEventListener('app:sound', (e) => {
+      if ((e as CustomEvent).detail?.kind === 'gameover') w.__gameOverSound = true;
+    });
+  });
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  // 何も叩かずに待ち続ける。序盤の猶予（判定20ノーツ）を超え、精度が下限（50%）を
+  // 割った時点でゲームオーバーになり、音が鳴ってから結果カードが出る
+  await expect(page.locator('#result-screen')).toBeVisible({ timeout: 90_000 });
+  await expect(page.locator('#result-gameover')).toBeVisible();
+  await expect(page.locator('#result-gameover')).toHaveText('GAME OVER');
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __gameOverSound: boolean }).__gameOverSound))
+    .toBe(true);
+  // 失敗の回は、途中までの成績（精度 0.0%）が出て、「次の曲」は出ない
+  await expect(page.locator('#result-accuracy')).toHaveText('0.0');
+  await expect(page.locator('#next-button')).toBeHidden();
+  await expect(page.locator('#again-button')).toBeVisible();
+  await expect(page.locator('#back-button')).toBeVisible();
+  // ベストスコア・ベストランクは更新されない（メニューに戻っても 0 / — のまま）
+  await page.locator('#back-button').click();
+  await expect(page.locator('#menu-screen')).toBeVisible();
+  await expect(page.locator('#menu-best')).toHaveText('0');
+  await expect(page.locator('#menu-best-rank')).toHaveText('—');
+});
+
 test('フリックノーツは上フリックで取れる（タップでは取れない）', async ({ page }) => {
   test.setTimeout(90_000);
   // 既定の曲・難易度（warae / easy）の最初のフリックノーツを譜面から読む

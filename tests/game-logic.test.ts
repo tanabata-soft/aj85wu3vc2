@@ -5,9 +5,12 @@ import {
   findFlickHit,
   findHit,
   findNearestNote,
+  isGameOver,
   makePlayNotes,
   rankFor,
   rankMeterState,
+  GAME_OVER_ACCURACY_FLOOR,
+  GAME_OVER_GRACE_NOTES,
   RANK_THRESHOLDS,
   validateCharts,
   type JudgementCounts,
@@ -242,5 +245,44 @@ describe('rankMeterState（演奏中のランクメーター）', () => {
     expect(st.rank).toBe('C');
     expect(st.nextRank).toBe('B');
     expect(st.toNext).toBeCloseTo(4);
+  });
+});
+
+describe('isGameOver（精度下限によるゲームオーバー）', () => {
+  const counts = (p: Partial<JudgementCounts>): JudgementCounts => ({ perfect: 0, great: 0, good: 0, miss: 0, ...p });
+
+  it('下限は 50%、猶予は判定 20 ノーツ', () => {
+    expect(GAME_OVER_ACCURACY_FLOOR).toBe(50);
+    expect(GAME_OVER_GRACE_NOTES).toBe(20);
+  });
+
+  it('猶予の間は、全ミスでも発動しない（序盤の即死防止）', () => {
+    expect(isGameOver(counts({}))).toBe(false);
+    expect(isGameOver(counts({ miss: GAME_OVER_GRACE_NOTES }))).toBe(false);
+  });
+
+  it('猶予を超えて精度が 50% を割ると発動する', () => {
+    // 21 ノーツ全部ミス → 精度 0%
+    expect(isGameOver(counts({ miss: 21 }))).toBe(true);
+    // (10 + 0) / 21 ≒ 47.6% → 発動
+    expect(isGameOver(counts({ perfect: 10, miss: 11 }))).toBe(true);
+    // 全 GOOD（重み 0.4）でも 40% までしか行かないので発動する（ミス 0 でも起こりうる）
+    expect(isGameOver(counts({ good: 21 }))).toBe(true);
+  });
+
+  it('ちょうど 50.0% は「割っていない」ので発動しない', () => {
+    // 11 / 22 = 50.0%
+    expect(isGameOver(counts({ perfect: 11, miss: 11 }))).toBe(false);
+  });
+
+  it('精度が下限以上なら発動しない（C 帯の下側の例）', () => {
+    // (11 + 0.7) / 21 ≒ 55.7% → C 帯（50〜70）の内側
+    expect(isGameOver(counts({ perfect: 11, great: 1, miss: 9 }))).toBe(false);
+    expect(isGameOver(counts({ perfect: 21 }))).toBe(false);
+  });
+
+  it('結果ランクの定義は変えない（50% 未満でも rankFor は C）', () => {
+    expect(rankFor(49.9)).toBe('C');
+    expect(rankFor(0)).toBe('C');
   });
 });

@@ -22,6 +22,8 @@ import {
   findHit,
   findNearestNote,
   isComboShow,
+  isGameOver,
+  GAME_OVER_ACCURACY_FLOOR,
   lyricIndexAt,
   makePlayNotes,
   rankFor,
@@ -60,6 +62,8 @@ export interface GameResult {
   rank: Rank;
   /** オートプレイで演奏したか（true の回はベストスコアに残さない） */
   autoplay: boolean;
+  /** 精度下限を割ってゲームオーバーになったか（true の回はベストスコアに残さない） */
+  failed: boolean;
 }
 
 export interface GameCallbacks {
@@ -86,6 +90,8 @@ const GOLD = '#ffd166';
 
 /** ランク帯の色（オーナー承認済みのモックどおり: C=グレー / B=ブロンズ / A=青 / S=金） */
 const RANK_COLORS: Record<Rank, string> = { C: '#c8ccd4', B: '#c98a4b', A: '#7fb2d9', S: '#f2c14e' };
+/** ゲームオーバーの「圏外」ゾーン（精度下限未満）の色 */
+const GAME_OVER_COLOR = '#ff4545';
 /** ランクメーターの置き場所（上段の中断ボタン・スコアの下、2段目）。座標はステージ内 */
 const RANK_METER = { panelX: 6, panelY: 54, panelH: 50, badgeX: 14, badgeY: 59, badgeSize: 40, meterY: 67, meterH: 15, rightW: 88 };
 
@@ -821,6 +827,8 @@ export class Game {
       this.counts[judge]++;
     }
     setData('score', this.score);
+    // 精度が下限を割ったらゲームオーバー（GOOD の積み重ねでも起こりうる）
+    this.checkGameOver();
   }
 
   /**
@@ -1016,7 +1024,7 @@ export class Game {
   }
 
 
-  private finish(): void {
+  private finish(failed = false): void {
     this.playing = false;
     cancelAnimationFrame(this.raf);
     stopCurrent();
@@ -1032,7 +1040,24 @@ export class Game {
       accuracy: acc,
       rank: rankFor(acc),
       autoplay: this.autoplay,
+      failed,
     });
+  }
+
+  /**
+   * ゲームオーバーの発動チェック（オーナー指示 2026-11-22: ライフゲージは作らず、
+   * ランクメーターの精度が下限 50% を割ったらゲームオーバー。判定の猶予 20 ノーツ、
+   * 判定ロジックは logic.ts の isGameOver）。
+   * 判定が更新される経路（ヒット・ミス掃除・長押しの成否）の直後から呼び、
+   * 発動したらその場で演奏を終了する。発動して終了させたときだけ true を返す
+   * （ループ内から呼ばれた場合は、そのフレームの残りを打ち切るために使う）。
+   * オートプレイでは発動しない。中断中は判定が動かないので対象にしない。
+   */
+  private checkGameOver(): boolean {
+    if (this.autoplay || this.paused || !this.playing) return false;
+    if (!isGameOver(this.counts)) return false;
+    this.finish(true);
+    return true;
   }
 
   /**
@@ -1041,6 +1066,9 @@ export class Game {
    * 右に現在精度と「次のランクまであと◯.◯」。精度は結果画面と同じく accuracy(counts) で、
    * 演奏中は判定済みノーツに対する現在値になる。
    * 判定がまだ無い開始直後は、精度を「—」にして帯は空・バッジは C で出す。
+   * 帯の左端（下限 50% 未満）はゲームオーバーの「圏外」ゾーンとして赤く塗り、
+   * 50% の位置に赤いラインと「OUT」ラベルを出す（v1.4.6。ランクバッジは
+   * 圏外でも C のまま。結果ランクの定義とは別の、ゲームオーバー専用の表示）。
    */
   private drawRankMeter(g: CanvasRenderingContext2D, W: number): void {
     const st = rankMeterState(this.counts);
@@ -1061,14 +1089,15 @@ export class Game {
     g.textAlign = 'center';
     g.fillText(st.rank, M.badgeX + M.badgeSize / 2, M.badgeY + 29);
 
-    // 帯メーター: ランク帯の色分け＋現在精度までの明るいフィル＋針
+    // 帯メーター: 圏外ゾーン＋ランク帯の色分け＋現在精度までの明るいフィル＋針
     const mx = M.badgeX + M.badgeSize + 10;
     const mw = W - M.rightW - mx - 6;
-    const zones: { from: number; to: number; rank: Rank }[] = [
-      { from: 0, to: RANK_THRESHOLDS.B, rank: 'C' },
-      { from: RANK_THRESHOLDS.B, to: RANK_THRESHOLDS.A, rank: 'B' },
-      { from: RANK_THRESHOLDS.A, to: RANK_THRESHOLDS.S, rank: 'A' },
-      { from: RANK_THRESHOLDS.S, to: 100, rank: 'S' },
+    const zones: { from: number; to: number; color: string }[] = [
+      { from: 0, to: GAME_OVER_ACCURACY_FLOOR, color: GAME_OVER_COLOR },
+      { from: GAME_OVER_ACCURACY_FLOOR, to: RANK_THRESHOLDS.B, color: RANK_COLORS.C },
+      { from: RANK_THRESHOLDS.B, to: RANK_THRESHOLDS.A, color: RANK_COLORS.B },
+      { from: RANK_THRESHOLDS.A, to: RANK_THRESHOLDS.S, color: RANK_COLORS.A },
+      { from: RANK_THRESHOLDS.S, to: 100, color: RANK_COLORS.S },
     ];
     const xAt = (acc: number): number => mx + (mw * Math.max(0, Math.min(100, acc))) / 100;
     g.save();
@@ -1076,7 +1105,7 @@ export class Game {
     g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
     g.clip();
     for (const z of zones) {
-      g.fillStyle = RANK_COLORS[z.rank];
+      g.fillStyle = z.color;
       g.globalAlpha = 0.45;
       g.fillRect(xAt(z.from), M.meterY, xAt(z.to) - xAt(z.from), M.meterH);
     }
@@ -1090,13 +1119,23 @@ export class Game {
       g.fillStyle = '#fff';
       g.fillRect(xAt(st.accuracy) - 1.5, M.meterY - 2, 3, M.meterH + 4);
     }
-    // 境目のラベル（B 70 / A 85 / S 95）
+    // ゲームオーバーのライン（下限の位置に赤い線。針と重なっても見分けられるよう少し太く）
+    g.fillStyle = GAME_OVER_COLOR;
+    g.fillRect(xAt(GAME_OVER_ACCURACY_FLOOR) - 1.5, M.meterY - 2, 3, M.meterH + 4);
+    // 境目のラベル（B 70 / A 85 / S 95）と、圏外ゾーンの「OUT」
     g.font = '10px sans-serif';
     g.fillStyle = 'rgba(255,255,255,.55)';
     g.textAlign = 'center';
-    for (const z of zones.slice(1)) {
-      g.fillText(`${z.rank} ${z.from}`, xAt(z.from), M.meterY + M.meterH + 13);
+    const boundaryLabels: { rank: Rank; at: number }[] = [
+      { rank: 'B', at: RANK_THRESHOLDS.B },
+      { rank: 'A', at: RANK_THRESHOLDS.A },
+      { rank: 'S', at: RANK_THRESHOLDS.S },
+    ];
+    for (const b of boundaryLabels) {
+      g.fillText(`${b.rank} ${b.at}`, xAt(b.at), M.meterY + M.meterH + 13);
     }
+    g.fillStyle = 'rgba(255,92,92,.9)';
+    g.fillText('OUT', xAt(GAME_OVER_ACCURACY_FLOOR / 2), M.meterY + M.meterH + 13);
 
     // 右ブロック: 現在精度と次のランクまで
     g.textAlign = 'right';
@@ -1211,6 +1250,8 @@ export class Game {
       this.syncCombo();
       // ミス音はこの掃除で1回だけ（複数ノーツ同時ミスでも重ねない。連続フレームの抑制は playMissSound 側）
       playMissSound();
+      // 精度が下限を割ったら、そのフレームでゲームオーバーにして打ち切る
+      if (this.checkGameOver()) return;
     }
 
     // 長押しの進行: tick スコア（拍ごと。音はヒット音の連打が担当し、tick 自体は鳴らさない）、
@@ -1251,6 +1292,8 @@ export class Game {
         playFailSound();
       }
     }
+    // 長押しの成否で判定が動いた直後にも、精度下限のチェックをする
+    if (this.checkGameOver()) return;
 
     g.fillStyle = '#0e1018';
     g.fillRect(0, 0, W, H);

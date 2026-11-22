@@ -885,6 +885,15 @@
   margin: 12px 0 4px;
 }
 
+/* ゲームオーバー（精度下限を割った失敗）の印。ランク文字の上に赤く大きく出す */
+#view-game .result .gameover-badge {
+  margin: 10px 0 0;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #ff5252;
+}
+
 #view-game .result p {
   margin: 6px 0;
 }

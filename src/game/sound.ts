@@ -3,7 +3,8 @@
 // ボイス（どちらも任意の素材スロット。src/presentation.ts と下記参照）と、
 // 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 に合成から差し替え）と、
 // フリック音のサンプル音源（オーナーが試聴プレビューから選んだ音源そのもの。
-// 2026-11-22 に合成から差し替え。下記のフリック音の節を参照）。
+// 2026-11-22 に合成から差し替え。下記のフリック音の節を参照）と、
+// ゲームオーバー音（オーナー提供の音源ファイル。2026-11-22 に追加）。
 // 音は、曲の再生と同じ AudioContext（src/audio.ts）を使う。
 //
 // ヒット音は「サンプル音源方式」: src/assets/hit-sample.wav（テンプレート付属の
@@ -30,6 +31,7 @@ import { hitPitchMultiplier, type Judge, type Rank } from './logic';
 import hitSampleUrl from './assets/hit-sample.wav';
 import flickSampleUrl from './assets/flick-sample.wav';
 import resultJingleUrl from './assets/result-jingle.mp3';
+import gameOverUrl from './assets/game-over.mp3';
 
 export type HitJudge = Exclude<Judge, 'miss'>;
 
@@ -557,6 +559,51 @@ export function playResultJingle(rank: Rank): number {
       .catch(() => undefined);
     document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'jingle', rank } }));
     return resultJingleDurationMs(rank);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * ゲームオーバー音（オーナー提供 WAV「cyber_failed_hard_3sec.wav」3.0秒を
+ * MP3 192kbps に変換した src/game/assets/game-over.mp3。2026-11-22 追加）。
+ * 結果発表ジングルと同じ方式: ビルドで dist に出力され Service Worker の
+ * precache に入り、演奏開始時に先読みし、ゲームオーバー確定時に鳴らし始める。
+ * 結果カード（失敗表示）は、音の頭が聞き取れるだけ待ってから出す（出す側の
+ * game-main.ts が、返ってきた長さだけ表示を遅らせる。素材は 3.0 秒あるので、
+ * カードが出たあとも鳴り続ける）。
+ * 効果音オフのときは鳴らさず、長さ 0 を返す（結果は即表示）。
+ */
+
+/** ゲームオーバー音を鳴らしてから結果カードを出すまでの長さ (ms) */
+export const GAME_OVER_WAIT_MS = 1500;
+
+/** 演奏開始のときにゲームオーバー素材を先読みしておく（確定の瞬間に鳴らし始めるため） */
+export function preloadGameOverSound(): void {
+  void loadBuffer(gameOverUrl).catch(() => undefined);
+}
+
+/**
+ * ゲームオーバー音（素材ファイル）を鳴らし始めて、結果カードを出すまでの
+ * 長さ（ms）を返す。効果音オフのときは鳴らさず 0 を返す（結果は即表示）。
+ * 再生は効果音の出口（hitBus）経由で、曲の再生管理には触らない。
+ * 素材の読み込み・デコードに失敗しても、表示の流れは止めない（待ち時間は返す）。
+ */
+export function playGameOverSound(): number {
+  if (!enabled) return 0;
+  try {
+    const ac = audioContext();
+    void ac.resume();
+    void loadBuffer(gameOverUrl)
+      .then((buf) => {
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        src.connect(hitBus());
+        src.start();
+      })
+      .catch(() => undefined);
+    document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'gameover' } }));
+    return GAME_OVER_WAIT_MS;
   } catch {
     return 0;
   }
