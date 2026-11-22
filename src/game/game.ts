@@ -84,20 +84,31 @@ export interface GameCallbacks {
 // 判定ラインの高さはタッチ位置設定（logic.ts の hitYRatio）で決まる:
 // standard = H×0.82（従来位置）、high = H×0.74。Game.hitY() を参照
 const READY_SECONDS = 2;
-/** 左上の中断ボタン（描画とタップ判定で共有する。オーナー指示 2026-11-21: × ではなく「❚❚ 中断」） */
-const PAUSE_BTN = { x: 10, y: 10, w: 100, h: 38 };
+/**
+ * 左上の中断ボタン（描画とタップ判定で共有する）。v1.4.9 の上部 UI 見直し
+ * （オーナー承認済みのモック）で、「❚❚ 中断」の文字付き横長ボタン（100×38）から
+ * ❚❚ アイコンだけの丸ボタン（直径 40px）に変更した。中心は旧ボタンと同じ (30, 29)。
+ */
+const PAUSE_BTN = { cx: 30, cy: 29, r: 20 };
+/** スコアのフォント（描画と、メーターの横幅を決める実測で共有する） */
+const SCORE_FONT = 'bold 18px sans-serif';
+/** スコアの baseline（上部1行の中心 = PAUSE_BTN.cy に文字が揃う位置） */
+const SCORE_BASELINE_Y = 35;
 /** 中断確認で「つづける」を押してから演奏が戻るまでの READY の時間（壁時計 ms） */
 const RESUME_COUNTDOWN_MS = 1000;
 const JUDGE_LABEL: Record<Judge, string> = { perfect: 'PERFECT', great: 'GREAT', good: 'GOOD', miss: 'MISS' };
 const JUDGE_COLOR: Record<Judge, string> = { perfect: '#ffd166', great: '#4ecdc4', good: '#9aa8ff', miss: '#ff6b6b' };
-const GOLD = '#ffd166';
 
 /** ランクの色（メーターの fill の色に使う: C=グレー / B=ブロンズ / A=青 / S=金） */
 const RANK_COLORS: Record<Rank, string> = { C: '#c8ccd4', B: '#c98a4b', A: '#7fb2d9', S: '#f2c14e' };
 /** ゲームオーバーライン（精度下限）の色 */
 const GAME_OVER_COLOR = '#ff4545';
-/** ランクメーターの置き場所（上段の中断ボタン・スコアの下、2段目）。座標はステージ内。v1.4.7 の簡素化で細いバーだけになり、パネルも薄くなった */
-const RANK_METER = { panelX: 6, panelY: 54, panelH: 26, meterX: 14, meterY: 63, meterH: 8, pctW: 54 };
+/**
+ * ランクメーターの置き場所（座標はステージ内）。v1.4.9 の上部 UI 見直しで、
+ * 中断ボタン・スコアと同じ1行（中心 y = PAUSE_BTN.cy）に集約し、背景パネルは撤去した。
+ * バーは中断ボタンの右から、右端のスコアの左に収まる幅で引く（% はバーの右に置く）。
+ */
+const RANK_METER = { meterX: 62, meterY: 25, meterH: 8, pctW: 46, scoreGap: 10, edgeGap: 14 };
 
 /** コンボ段階ごとのベール（暗幕）の濃さ。段階が上がるほど薄くなり、ジャケットが冴える */
 const TIER_VEIL_ALPHA = [0.62, 0.57, 0.52, 0.46, 0.4] as const;
@@ -333,7 +344,10 @@ export class Game {
     const rect = this.canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    if (px >= PAUSE_BTN.x && px <= PAUSE_BTN.x + PAUSE_BTN.w && py >= PAUSE_BTN.y && py <= PAUSE_BTN.y + PAUSE_BTN.h) {
+    // 中断ボタンは丸ボタン: 中心からの距離が半径以内なら当たったことにする
+    const pdx = px - PAUSE_BTN.cx;
+    const pdy = py - PAUSE_BTN.cy;
+    if (pdx * pdx + pdy * pdy <= PAUSE_BTN.r * PAUSE_BTN.r) {
       this.pause();
       return;
     }
@@ -1080,27 +1094,28 @@ export class Game {
   }
 
   /**
-   * ランクメーター（演奏画面の上部2段目に常時表示。オーナー指示 2026-11-22「スコアのメーター表示して／ランクがわかるやつ」で新設）。
+   * ランクメーター（演奏画面の上部に常時表示。オーナー指示 2026-11-22「スコアのメーター表示して／ランクがわかるやつ」で新設）。
    * v1.4.7 で簡素化（オーナー指示「もっとしんぷるにできないか？」「大きいランク表示いらないかも。
    * 結果で分かるので、メーターは目安程度で」）: 残すのは次の3要素だけにした。
    * (1) 細いバー1本（fill の長さ = 現在精度、色 = 現在ランクの色）、
    * (2) ゲームオーバーライン（下限 50% の位置の赤い tick）、(3) バーの右の精度 % 表示。
    * バッジ・ゾーン色分け・目盛りラベル・OUT ラベルと圏外ゾーン・「次のランクまで」は撤去した。
+   * v1.4.9 の上部 UI 見直しで、中断ボタン・スコアと同じ1行に集約し、背景パネルも撤去した
+   * （バーは中断ボタンの右から、右端のスコアの手前までに引く。スコアの幅は実測する）。
    * 精度は結果画面と同じく accuracy(counts) で、演奏中は判定済みノーツに対する現在値になる。
    * 判定がまだ無い開始直後は、空のバーと tick だけを出す（% は出さない）。
    */
   private drawRankMeter(g: CanvasRenderingContext2D, W: number): void {
     const st = rankMeterState(this.counts);
     const M = RANK_METER;
-    // 背景パネル（中断ボタンと同じ半透明の暗色。落ちてくるノーツの上でも読めるように）
-    g.fillStyle = 'rgba(6,8,16,.35)';
-    g.beginPath();
-    g.roundRect(M.panelX, M.panelY, W - M.panelX * 2, M.panelH, 12);
-    g.fill();
-
+    // バーの右端は、% の分を空けて、さらに右端のスコアに重ならない位置まで。
+    // スコアは右端 (W - edgeGap) に右寄せで出るので、その実測幅の分を空ける
+    g.font = SCORE_FONT;
+    const scoreW = g.measureText(String(this.score).padStart(7, '0')).width;
+    const pctRight = W - M.edgeGap - scoreW - M.scoreGap;
     // バー: 暗いトラックの上に、現在精度までの fill を現在ランクの色で引く
     const mx = M.meterX;
-    const mw = W - 12 - M.pctW - mx;
+    const mw = Math.max(0, pctRight - M.pctW - mx);
     const xAt = (acc: number): number => mx + (mw * Math.max(0, Math.min(100, acc))) / 100;
     g.beginPath();
     g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
@@ -1124,7 +1139,7 @@ export class Game {
       g.textAlign = 'right';
       g.fillStyle = '#fff';
       g.font = 'bold 13px sans-serif';
-      g.fillText(`${st.accuracy.toFixed(1)}%`, W - 14, M.meterY + M.meterH / 2 + 5);
+      g.fillText(`${st.accuracy.toFixed(1)}%`, pctRight, M.meterY + M.meterH / 2 + 5);
       g.textAlign = 'left';
     }
   }
@@ -1606,22 +1621,22 @@ export class Game {
       g.globalAlpha = 1;
     }
     g.textAlign = 'left';
-    // 中断ボタン: × ではなく「❚❚ 中断」と分かる見た目にする（オーナー指示 2026-11-21）
+    // 中断ボタン: 丸ボタンに ❚❚ アイコンだけ（v1.4.9 の上部 UI 見直しで文字は消した）
     g.fillStyle = 'rgba(6,8,16,.45)';
     g.beginPath();
-    g.roundRect(PAUSE_BTN.x, PAUSE_BTN.y, PAUSE_BTN.w, PAUSE_BTN.h, 19);
+    g.arc(PAUSE_BTN.cx, PAUSE_BTN.cy, PAUSE_BTN.r, 0, Math.PI * 2);
     g.fill();
     g.fillStyle = '#fff';
-    g.fillRect(PAUSE_BTN.x + 15, PAUSE_BTN.y + 10, 5, 18);
-    g.fillRect(PAUSE_BTN.x + 24, PAUSE_BTN.y + 10, 5, 18);
-    g.font = 'bold 15px sans-serif';
-    g.fillText('中断', PAUSE_BTN.x + 40, PAUSE_BTN.y + 25);
-    g.font = 'bold 21px sans-serif';
+    g.fillRect(PAUSE_BTN.cx - 7, PAUSE_BTN.cy - 8, 5, 16);
+    g.fillRect(PAUSE_BTN.cx + 2, PAUSE_BTN.cy - 8, 5, 16);
+    g.font = SCORE_FONT;
     g.textAlign = 'right';
-    g.fillText(String(this.score).padStart(7, '0'), W - 14, 36);
+    g.fillText(String(this.score).padStart(7, '0'), W - 14, SCORE_BASELINE_Y);
+    // 曲の進行バー（最上端 3px）。経過分の色は金から白に変えた
+    // （金色のランクメーターと並ぶと紛らわしいため、v1.4.9 の見直し）
     g.fillStyle = 'rgba(255,255,255,.2)';
     g.fillRect(0, 0, W, 3);
-    g.fillStyle = GOLD;
+    g.fillStyle = '#fff';
     g.fillRect(0, 0, W * Math.max(0, Math.min(1, nowSec / this.durationSec)), 3);
     this.drawRankMeter(g, W);
 
