@@ -4,6 +4,7 @@ import {
   effectiveFallSeconds,
   findFlickHit,
   findHit,
+  findKeyboardHit,
   findNearestNote,
   hitYRatio,
   isGameOver,
@@ -101,6 +102,47 @@ describe('findFlickHit（フリック判定）', () => {
     notes[0].state = 1;
     const hit = findFlickHit(notes, 1, 1000);
     expect(hit?.note.timeMs).toBe(1100);
+  });
+});
+
+describe('findKeyboardHit（キーボード判定）', () => {
+  it('フリックノーツを通常のキー押しで取れる（タップと同じ判定）', () => {
+    const notes = play([[1000, 1, 0, 'flick']]);
+    const hit = findKeyboardHit(notes, 1, 1000);
+    expect(hit?.note.flick).toBe(true);
+    expect(hit?.judge).toBe('perfect');
+    expect(findKeyboardHit(notes, 1, 1080)?.judge).toBe('great');
+    expect(findKeyboardHit(notes, 1, 1150)?.judge).toBe('good');
+  });
+
+  it('種別を問わず、いちばん近いノーツを取る', () => {
+    const flickFirst = play([
+      [1000, 1, 0, 'flick'],
+      [1090, 1],
+    ]);
+    expect(findKeyboardHit(flickFirst, 1, 1000)?.note.timeMs).toBe(1000);
+    const tapFirst = play([
+      [1000, 1],
+      [1090, 1, 0, 'flick'],
+    ]);
+    expect(findKeyboardHit(tapFirst, 1, 1090)?.note.timeMs).toBe(1090);
+  });
+
+  it('通常ノーツと長押しの頭も従来どおり取れる', () => {
+    const notes = play([
+      [1000, 0],
+      [2000, 2, 800],
+    ]);
+    expect(findKeyboardHit(notes, 0, 1010)?.judge).toBe('perfect');
+    expect(findKeyboardHit(notes, 2, 2000)?.note.holdMs).toBe(800);
+  });
+
+  it('判定窓の外・別レーン・判定済みは対象にしない', () => {
+    const notes = play([[1000, 1, 0, 'flick']]);
+    expect(findKeyboardHit(notes, 1, 1300)).toBeNull();
+    expect(findKeyboardHit(notes, 0, 1000)).toBeNull();
+    notes[0].state = 1;
+    expect(findKeyboardHit(notes, 1, 1000)).toBeNull();
   });
 });
 

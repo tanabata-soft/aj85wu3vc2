@@ -8,7 +8,10 @@ export type SongId = string;
 export type Difficulty = 'easy' | 'normal' | 'hard';
 export type Judge = 'perfect' | 'great' | 'good' | 'miss';
 
-/** ノーツの種別。'flick' はフリックノーツ（タップでは取れず、上フリック必須） */
+/**
+ * ノーツの種別。'flick' はフリックノーツ（ポインタのタップでは取れず、上フリック必須。
+ * キーボードだけは例外で、通常のキー押しでそのまま取れる）
+ */
 export type NoteKind = 'flick';
 
 /**
@@ -454,6 +457,21 @@ export function findFlickHit(notes: PlayNote[], lane: number, nowMs: number): { 
   if (!tap) return null;
   const judge = judgeFor(tap.delta);
   return judge ? { note: tap.note, judge } : null;
+}
+
+/**
+ * キーボードで叩いたレーンで取るノーツを探す。キーボードにはフリックの
+ * ジェスチャが無いので、フリックノーツも通常のタップノーツと同じキー押しで
+ * 取れるようにする（オーナー指示 2026-11-22「キーボードは、フリックもそのまま
+ * 叩ける判定にして」）。種別を問わずいちばん近い未判定ノーツを、タップと同じ
+ * 判定窓・区分（PERFECT/GREAT/GOOD）で返す。判定窓の外なら null。
+ * 長押しの頭も従来どおり対象に含む（キーボードの長押し処理は無変更）。
+ */
+export function findKeyboardHit(notes: PlayNote[], lane: number, nowMs: number): { note: PlayNote; judge: Exclude<Judge, 'miss'> } | null {
+  const found = closestPending(notes, lane, nowMs, () => true);
+  if (!found) return null;
+  const judge = judgeFor(found.delta);
+  return judge ? { note: found.note, judge } : null;
 }
 
 /**

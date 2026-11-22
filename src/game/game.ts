@@ -21,6 +21,7 @@ import {
   emptyCounts,
   findFlickHit,
   findHit,
+  findKeyboardHit,
   findNearestNote,
   hitYRatio,
   isComboShow,
@@ -420,7 +421,7 @@ export class Game {
     const lane = 'dfjk'.indexOf(e.key.toLowerCase());
     if (lane < 0) return;
     this.keyLanes.add(lane);
-    this.pressLane(lane);
+    this.pressLane(lane, undefined, undefined, true);
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
@@ -784,7 +785,7 @@ export class Game {
     if (this.ripples.length > 24) this.ripples.shift();
   }
 
-  private pressLane(lane: number, rippleX?: number, rippleY?: number): void {
+  private pressLane(lane: number, rippleX?: number, rippleY?: number, viaKeyboard = false): void {
     // 保険: 再生中に AudioContext が止まっていたら（iOS の interrupted など）、タップのついでに戻す。
     // resume だけでは戻らないことがあるため、ジェスチャの中で効く強い unlock（resume＋
     // 音声セッション再設定＋無音バッファ）を使う（2026-11-20 実機で「READY のまま
@@ -803,9 +804,11 @@ export class Game {
     }
     // いちばん近い未判定ノーツがフリックノーツなら、この押しはフリック操作の
     // 始まりとして扱い、タップ判定も空振り音も出さない（フリック必須。
-    // 指を離すだけでは取れず、窓を過ぎれば通常のミスになる）
-    if (findNearestNote(this.notes, lane, nowMs)?.flick) return;
-    const hit = findHit(this.notes, lane, nowMs);
+    // 指を離すだけでは取れず、窓を過ぎれば通常のミスになる）。
+    // キーボードだけは例外: フリックのジェスチャが無いので、フリックノーツも
+    // 通常のタップと同じキー押しでそのまま取る（オーナー指示 2026-11-22）
+    if (!viaKeyboard && findNearestNote(this.notes, lane, nowMs)?.flick) return;
+    const hit = viaKeyboard ? findKeyboardHit(this.notes, lane, nowMs) : findHit(this.notes, lane, nowMs);
     if (!hit) {
       // ノーツのないレーンを押したときも、ヒット音とは別の小さな音で「触れた」ことを返す
       playEmptySound();
