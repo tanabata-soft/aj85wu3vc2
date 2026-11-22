@@ -44,7 +44,7 @@ import {
 import type { SongEntry } from './charts';
 import { COMBO_PATTERNS, COMBO_SHOW_CONFIG, comboPatternDef } from './presentation';
 import { audioContext, loadBuffer, nowSeconds, playBuffer, recreateAudioContext, resumeAudio, stopCurrent, unlockAudio } from './audio';
-import { playCompleteSound, playEmptySound, playFailSound, playHitSound, startHoldSound, stopAllHoldSounds, stopHoldSound } from './sound';
+import { playCompleteSound, playEmptySound, playFailSound, playFlickSound, playHitSound, startHoldSound, stopAllHoldSounds, stopHoldSound } from './sound';
 import { vibrateHit } from './haptics';
 import { setData } from '../debug';
 
@@ -133,11 +133,26 @@ interface Ripple {
   life: number;
   c: string;
 }
+/** フリック成功時に上へ飛んで消えるシェブロン（∧） */
+interface FlickChev {
+  x: number;
+  /** 出現位置 (y)。上昇は age から計算する */
+  y: number;
+  age: number;
+  life: number;
+}
 
 const RING_LIFE = 0.32;
 const POP_LIFE = 0.18;
 const RIPPLE_LIFE = 0.38;
 const JUDGE_LIFE = 0.55;
+/** フリックノーツの中でシェブロンが並ぶ間隔 (px) */
+const FLICK_CHEVRON_GAP_PX = 11;
+/** フリックノーツの中をシェブロンが上へ流れる速さ (px/秒)。間隔1つ分を 0.25 秒で進む */
+const FLICK_CHEVRON_FLOW_PX_PER_SEC = 44;
+/** フリック成功時に飛ぶシェブロンの寿命（秒）と上昇距離 (px) */
+const FLICK_CHEV_LIFE = 0.35;
+const FLICK_CHEV_RISE_PX = 60;
 /** コンボ演出の登場時の紙吹雪の色 */
 const CONFETTI_COLORS = ['#ff6b6b', '#ffd166', '#4ecdc4', '#6c8cff', '#ff8ad8', '#ffffff'];
 /** コンボ演出の絵の読み込み済み Image（パターンごとに 1 回だけ作る。素材スロットに絵があるパターンだけ） */
@@ -264,6 +279,7 @@ export class Game {
   private rings: Ring[] = [];
   private pops: Pop[] = [];
   private ripples: Ripple[] = [];
+  private flickChevs: FlickChev[] = [];
   private judgeText = '';
   private judgeColor = '#fff';
   private judgeTier = 0; // 判定文字を出した時点のコンボ tier（大きさ・色に使う）
@@ -522,6 +538,7 @@ export class Game {
     this.rings = [];
     this.pops = [];
     this.ripples = [];
+    this.flickChevs = [];
     this.flash = [0, 0, 0, 0];
     this.pointerLanes.clear();
     this.pointerGestures.clear();
@@ -774,8 +791,16 @@ export class Game {
     // コンボ tier で演出とヒット音が派手になる
     const tier = comboTier(this.combo);
     this.showJudge(judge, tier);
-    this.burst(lane, judge === 'perfect' ? 0 : judge === 'great' ? 1 : 2, tier);
-    playHitSound(judge, tier);
+    const level: 0 | 1 | 2 = judge === 'perfect' ? 0 : judge === 'great' ? 1 : 2;
+    this.burst(lane, level, tier);
+    if (note.flick) {
+      // フリックノーツは専用の音と演出にする（通常ノーツをフリックで叩いた
+      // 場合は note.flick が false なので、従来のタップ音・演出のまま）
+      playFlickSound(judge, tier);
+      this.flickBurst(lane, level, tier);
+    } else {
+      playHitSound(judge, tier);
+    }
     vibrateHit(judge);
     this.syncCombo();
     if (isComboShow(this.combo)) this.triggerComboShow(this.combo);
@@ -926,6 +951,30 @@ export class Game {
       const sp = (140 + Math.random() * (level === 0 ? 380 : 260)) * (0.9 + 0.1 * tier);
       this.spawnParticle(cx, cy, Math.cos(an) * sp, Math.sin(an) * sp - 70, 0.35 + Math.random() * 0.2, c, fx.particleSize);
     }
+  }
+
+  /**
+   * フリック成功時だけの追加演出（burst の残像・輪・粒子に重ねる）:
+   * 上方向へ噴き上がる粒子と、上へ飛んで消えるシェブロン（∧）。
+   * 粒子は初速を上向きに揃えるので、全方向に弾ける通常 burst と動きで区別できる
+   * （粒子の更新側の重力で、噴き上がってから落ちてくる放物線になる）。
+   * 色はレーン色を主に、白を混ぜて「抜けた」明るさを出す。
+   */
+  private flickBurst(lane: number, level: 0 | 1 | 2, tier: number): void {
+    const fx = tierFx(tier);
+    const lw = this.width / 4;
+    const cx = lane * lw + lw / 2;
+    const cy = this.height * HIT_Y_RATIO;
+    const c = LANE_COLORS[lane];
+    const n = Math.round((level === 0 ? 14 : level === 1 ? 10 : 7) * fx.particleMul);
+    for (let i = 0; i < n; i++) {
+      const vx = (Math.random() - 0.5) * 130;
+      const vy = -(260 + Math.random() * 260) * (0.9 + 0.1 * tier);
+      const color = i % 3 === 0 ? '#ffffff' : c;
+      this.spawnParticle(cx, cy, vx, vy, 0.4 + Math.random() * 0.2, color, fx.particleSize);
+    }
+    this.flickChevs.push({ x: cx, y: cy, age: 0, life: FLICK_CHEV_LIFE });
+    if (this.flickChevs.length > 12) this.flickChevs.shift();
   }
 
   /**
@@ -1269,20 +1318,38 @@ export class Game {
       gn.roundRect(n.lane * lw + 8, y - 14, lw - 16, 28, 8);
       gn.fill();
       if (n.flick) {
-        // フリックノーツの目印: 白い輪郭＋白い上向きシェブロン（∧）
+        // フリックノーツの目印: 白い輪郭＋ノーツの中で上へ流れ続ける白シェブロン（∧）。
+        // 「上へ弾く」ことが動きで伝わるようにする（オーナー決定 2026-11-22 の A 案）。
+        // シェブロンはノーツの形でクリップし、上下端付近では薄くして、
+        // 循環して流れ続ける見え方にする。位相は描画時刻（frameAt）から決める
         const cx = n.lane * lw + lw / 2;
         gn.strokeStyle = '#fff';
         gn.lineWidth = 2.5;
         gn.beginPath();
         gn.roundRect(n.lane * lw + 11, y - 11, lw - 22, 22, 6);
         gn.stroke();
+        gn.save();
+        gn.beginPath();
+        gn.roundRect(n.lane * lw + 8, y - 14, lw - 16, 28, 8);
+        gn.clip();
+        const flow = (frameAt * FLICK_CHEVRON_FLOW_PX_PER_SEC) % FLICK_CHEVRON_GAP_PX;
+        gn.strokeStyle = '#fff';
         gn.lineWidth = 3;
         gn.lineJoin = 'round';
-        gn.beginPath();
-        gn.moveTo(cx - 9, y + 5);
-        gn.lineTo(cx, y - 5);
-        gn.lineTo(cx + 9, y + 5);
-        gn.stroke();
+        for (let k = 0; k < 4; k++) {
+          const cy = y + 16 - flow - k * FLICK_CHEVRON_GAP_PX;
+          // 中心で最も濃く、上下端へ向けて消える（端で出入りが目立たないように）
+          const fade = 1 - Math.min(1, Math.abs(cy - y) / 15);
+          if (fade <= 0) continue;
+          gn.globalAlpha = fade;
+          gn.beginPath();
+          gn.moveTo(cx - 9, cy + 5);
+          gn.lineTo(cx, cy - 5);
+          gn.lineTo(cx + 9, cy + 5);
+          gn.stroke();
+        }
+        gn.restore();
+        gn.globalAlpha = 1;
       }
     }
 
@@ -1349,6 +1416,26 @@ export class Game {
       gn.stroke();
     }
     this.ripples = this.ripples.filter((r) => r.age < r.life);
+    gn.globalAlpha = 1;
+
+    // フリック成功時に飛ぶシェブロン: その場から上へ進みながら少し広がり、消える
+    for (const f of this.flickChevs) {
+      f.age += dt;
+      const k = f.age / f.life;
+      if (k >= 1) continue;
+      const rise = FLICK_CHEV_RISE_PX * (1 - (1 - k) * (1 - k));
+      const s = 11 + 3 * k;
+      gn.globalAlpha = 0.95 * (1 - k);
+      gn.strokeStyle = '#fff';
+      gn.lineWidth = 3.5;
+      gn.lineJoin = 'round';
+      gn.beginPath();
+      gn.moveTo(f.x - s, f.y - rise + s * 0.55);
+      gn.lineTo(f.x, f.y - rise - s * 0.55);
+      gn.lineTo(f.x + s, f.y - rise + s * 0.55);
+      gn.stroke();
+    }
+    this.flickChevs = this.flickChevs.filter((f) => f.age < f.life);
     gn.globalAlpha = 1;
 
     g.textAlign = 'center';
