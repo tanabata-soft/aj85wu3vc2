@@ -722,6 +722,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       save('best', bests);
     }
     $('result-rank').textContent = result.rank;
+    // ゲームオーバーの回はランクを出さない（オーナー指示 2026-11-22「ゲームオーバーはランクなしでいい」）
+    $('result-rank').hidden = result.failed;
     $('result-gameover').hidden = !result.failed;
     $('result-autoplay').hidden = !result.autoplay;
     // 失敗の回にフルコンボの印は出さない（全 GOOD で精度下限を割る等、ミス 0 でも起こりうる）
@@ -734,7 +736,10 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     $('result-combo').textContent = String(result.maxCombo);
     // 失敗の回は「次の曲」へ進めない（もう一度／メニューへのみ）
     $('next-button').hidden = result.failed;
-    $('game-live').textContent = `結果: ${result.failed ? 'ゲームオーバー、' : ''}ランク${result.rank}、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${isFullCombo(result.counts) && !result.failed ? '、フルコンボ' : ''}${result.autoplay ? '（オートプレイ）' : ''}`;
+    // 読み上げも、ゲームオーバーの回はランクを読み上げない（「ゲームオーバー」＋成績の形）
+    $('game-live').textContent = result.failed
+      ? `結果: ゲームオーバー、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${result.autoplay ? '（オートプレイ）' : ''}`
+      : `結果: ランク${result.rank}、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${isFullCombo(result.counts) ? '、フルコンボ' : ''}${result.autoplay ? '（オートプレイ）' : ''}`;
     show('result');
     renderMenu();
   }

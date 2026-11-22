@@ -291,6 +291,9 @@ test('演奏が終わるとジングルが鳴ってから結果が出る', async
     .toBe('C');
   // ジングルが終わると結果が出る
   await expect(page.locator('#result-screen')).toBeVisible({ timeout: 5_000 });
+  // 通常の結果ではランクが出る（ゲームオーバーの回だけ出さない）
+  await expect(page.locator('#result-rank')).toBeVisible();
+  await expect(page.locator('#result-rank')).toHaveText('C');
 });
 
 test('次の曲の読み込み中に、前の曲の歌詞が残らない', async ({ page }) => {
@@ -552,6 +555,10 @@ test('ノーツを逃し続けると、猶予明けにゲームオーバーに�
   await expect(page.locator('#result-screen')).toBeVisible({ timeout: 90_000 });
   await expect(page.locator('#result-gameover')).toBeVisible();
   await expect(page.locator('#result-gameover')).toHaveText('GAME OVER');
+  // ゲームオーバーの回はランクを出さない（オーナー指示 2026-11-22）。読み上げテキストにもランクは入らない
+  await expect(page.locator('#result-rank')).toBeHidden();
+  await expect(page.locator('#game-live')).toContainText('ゲームオーバー');
+  await expect(page.locator('#game-live')).not.toContainText('ランク');
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { __gameOverSound: boolean }).__gameOverSound))
     .toBe(true);
