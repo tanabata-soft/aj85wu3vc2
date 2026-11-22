@@ -28,7 +28,6 @@ import {
   makePlayNotes,
   rankFor,
   rankMeterState,
-  RANK_THRESHOLDS,
   accuracy,
   releaseHold,
   repressHold,
@@ -88,12 +87,12 @@ const JUDGE_LABEL: Record<Judge, string> = { perfect: 'PERFECT', great: 'GREAT',
 const JUDGE_COLOR: Record<Judge, string> = { perfect: '#ffd166', great: '#4ecdc4', good: '#9aa8ff', miss: '#ff6b6b' };
 const GOLD = '#ffd166';
 
-/** ランク帯の色（オーナー承認済みのモックどおり: C=グレー / B=ブロンズ / A=青 / S=金） */
+/** ランクの色（メーターの fill の色に使う: C=グレー / B=ブロンズ / A=青 / S=金） */
 const RANK_COLORS: Record<Rank, string> = { C: '#c8ccd4', B: '#c98a4b', A: '#7fb2d9', S: '#f2c14e' };
-/** ゲームオーバーの「圏外」ゾーン（精度下限未満）の色 */
+/** ゲームオーバーライン（精度下限）の色 */
 const GAME_OVER_COLOR = '#ff4545';
-/** ランクメーターの置き場所（上段の中断ボタン・スコアの下、2段目）。座標はステージ内 */
-const RANK_METER = { panelX: 6, panelY: 54, panelH: 50, badgeX: 14, badgeY: 59, badgeSize: 40, meterY: 67, meterH: 15, rightW: 88 };
+/** ランクメーターの置き場所（上段の中断ボタン・スコアの下、2段目）。座標はステージ内。v1.4.7 の簡素化で細いバーだけになり、パネルも薄くなった */
+const RANK_METER = { panelX: 6, panelY: 54, panelH: 26, meterX: 14, meterY: 63, meterH: 8, pctW: 54 };
 
 /** コンボ段階ごとのベール（暗幕）の濃さ。段階が上がるほど薄くなり、ジャケットが冴える */
 const TIER_VEIL_ALPHA = [0.62, 0.57, 0.52, 0.46, 0.4] as const;
@@ -1061,14 +1060,14 @@ export class Game {
   }
 
   /**
-   * ランクメーター（演奏画面の上部2段目に常時表示。オーナー指示 2026-11-22「スコアのメーター表示して／ランクがわかるやつ」）。
-   * 左に現在のランク文字のバッジ、中央に精度で伸びる帯（ランク帯で色分けし境目のラベル付き）、
-   * 右に現在精度と「次のランクまであと◯.◯」。精度は結果画面と同じく accuracy(counts) で、
-   * 演奏中は判定済みノーツに対する現在値になる。
-   * 判定がまだ無い開始直後は、精度を「—」にして帯は空・バッジは C で出す。
-   * 帯の左端（下限 50% 未満）はゲームオーバーの「圏外」ゾーンとして赤く塗り、
-   * 50% の位置に赤いラインと「OUT」ラベルを出す（v1.4.6。ランクバッジは
-   * 圏外でも C のまま。結果ランクの定義とは別の、ゲームオーバー専用の表示）。
+   * ランクメーター（演奏画面の上部2段目に常時表示。オーナー指示 2026-11-22「スコアのメーター表示して／ランクがわかるやつ」で新設）。
+   * v1.4.7 で簡素化（オーナー指示「もっとしんぷるにできないか？」「大きいランク表示いらないかも。
+   * 結果で分かるので、メーターは目安程度で」）: 残すのは次の3要素だけにした。
+   * (1) 細いバー1本（fill の長さ = 現在精度、色 = 現在ランクの色）、
+   * (2) ゲームオーバーライン（下限 50% の位置の赤い tick）、(3) バーの右の精度 % 表示。
+   * バッジ・ゾーン色分け・目盛りラベル・OUT ラベルと圏外ゾーン・「次のランクまで」は撤去した。
+   * 精度は結果画面と同じく accuracy(counts) で、演奏中は判定済みノーツに対する現在値になる。
+   * 判定がまだ無い開始直後は、空のバーと tick だけを出す（% は出さない）。
    */
   private drawRankMeter(g: CanvasRenderingContext2D, W: number): void {
     const st = rankMeterState(this.counts);
@@ -1079,75 +1078,35 @@ export class Game {
     g.roundRect(M.panelX, M.panelY, W - M.panelX * 2, M.panelH, 12);
     g.fill();
 
-    // ランクバッジ
-    g.fillStyle = RANK_COLORS[st.rank];
-    g.beginPath();
-    g.roundRect(M.badgeX, M.badgeY, M.badgeSize, M.badgeSize, 10);
-    g.fill();
-    g.fillStyle = '#10131c';
-    g.font = 'bold 24px sans-serif';
-    g.textAlign = 'center';
-    g.fillText(st.rank, M.badgeX + M.badgeSize / 2, M.badgeY + 29);
-
-    // 帯メーター: 圏外ゾーン＋ランク帯の色分け＋現在精度までの明るいフィル＋針
-    const mx = M.badgeX + M.badgeSize + 10;
-    const mw = W - M.rightW - mx - 6;
-    const zones: { from: number; to: number; color: string }[] = [
-      { from: 0, to: GAME_OVER_ACCURACY_FLOOR, color: GAME_OVER_COLOR },
-      { from: GAME_OVER_ACCURACY_FLOOR, to: RANK_THRESHOLDS.B, color: RANK_COLORS.C },
-      { from: RANK_THRESHOLDS.B, to: RANK_THRESHOLDS.A, color: RANK_COLORS.B },
-      { from: RANK_THRESHOLDS.A, to: RANK_THRESHOLDS.S, color: RANK_COLORS.A },
-      { from: RANK_THRESHOLDS.S, to: 100, color: RANK_COLORS.S },
-    ];
+    // バー: 暗いトラックの上に、現在精度までの fill を現在ランクの色で引く
+    const mx = M.meterX;
+    const mw = W - 12 - M.pctW - mx;
     const xAt = (acc: number): number => mx + (mw * Math.max(0, Math.min(100, acc))) / 100;
-    g.save();
     g.beginPath();
     g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
-    g.clip();
-    for (const z of zones) {
-      g.fillStyle = z.color;
-      g.globalAlpha = 0.45;
-      g.fillRect(xAt(z.from), M.meterY, xAt(z.to) - xAt(z.from), M.meterH);
-    }
-    g.globalAlpha = 1;
-    if (st.judged > 0) {
-      g.fillStyle = 'rgba(255,255,255,.30)';
+    g.fillStyle = '#2a2f3a';
+    g.fill();
+    if (st.judged > 0 && st.accuracy > 0) {
+      g.save();
+      g.beginPath();
+      g.roundRect(mx, M.meterY, mw, M.meterH, M.meterH / 2);
+      g.clip();
+      g.fillStyle = RANK_COLORS[st.rank];
       g.fillRect(mx, M.meterY, xAt(st.accuracy) - mx, M.meterH);
+      g.restore();
     }
-    g.restore();
-    if (st.judged > 0) {
-      g.fillStyle = '#fff';
-      g.fillRect(xAt(st.accuracy) - 1.5, M.meterY - 2, 3, M.meterH + 4);
-    }
-    // ゲームオーバーのライン（下限の位置に赤い線。針と重なっても見分けられるよう少し太く）
+    // ゲームオーバーライン（下限の位置に赤い細線だけ。バーを少しはみ出させて目印にする）
     g.fillStyle = GAME_OVER_COLOR;
-    g.fillRect(xAt(GAME_OVER_ACCURACY_FLOOR) - 1.5, M.meterY - 2, 3, M.meterH + 4);
-    // 境目のラベル（B 70 / A 85 / S 95）と、圏外ゾーンの「OUT」
-    g.font = '10px sans-serif';
-    g.fillStyle = 'rgba(255,255,255,.55)';
-    g.textAlign = 'center';
-    const boundaryLabels: { rank: Rank; at: number }[] = [
-      { rank: 'B', at: RANK_THRESHOLDS.B },
-      { rank: 'A', at: RANK_THRESHOLDS.A },
-      { rank: 'S', at: RANK_THRESHOLDS.S },
-    ];
-    for (const b of boundaryLabels) {
-      g.fillText(`${b.rank} ${b.at}`, xAt(b.at), M.meterY + M.meterH + 13);
-    }
-    g.fillStyle = 'rgba(255,92,92,.9)';
-    g.fillText('OUT', xAt(GAME_OVER_ACCURACY_FLOOR / 2), M.meterY + M.meterH + 13);
+    g.fillRect(xAt(GAME_OVER_ACCURACY_FLOOR) - 1, M.meterY - 2, 2, M.meterH + 4);
 
-    // 右ブロック: 現在精度と次のランクまで
-    g.textAlign = 'right';
-    g.fillStyle = '#fff';
-    g.font = 'bold 16px sans-serif';
-    g.fillText(st.judged > 0 ? `${st.accuracy.toFixed(1)}%` : '—', W - 12, M.meterY + 13);
+    // 精度の %（バーの右に小さく。判定が無いうちは出さない）
     if (st.judged > 0) {
-      g.font = '10px sans-serif';
-      g.fillStyle = 'rgba(255,255,255,.6)';
-      g.fillText(st.nextRank === null ? '最高ランク' : `${st.nextRank}まで あと${st.toNext.toFixed(1)}`, W - 12, M.meterY + M.meterH + 13);
+      g.textAlign = 'right';
+      g.fillStyle = '#fff';
+      g.font = 'bold 13px sans-serif';
+      g.fillText(`${st.accuracy.toFixed(1)}%`, W - 14, M.meterY + M.meterH / 2 + 5);
+      g.textAlign = 'left';
     }
-    g.textAlign = 'left';
   }
 
   private fit(): void {
