@@ -762,9 +762,13 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     show('menu');
     renderMenu();
   });
-  // 中断の確認カード: 「つづける」は READY をはさんで再開、「メニューに戻る」は記録せずメニューへ
+  // 中断の確認カード: 「つづける」は READY をはさんで再開、「はじめからやりなおす」は
+  // 同じ曲・難易度を頭から開始し直す、「メニューに戻る」は記録せずメニューへ
   $('pause-resume-button').addEventListener('click', () => {
     game.resume();
+  });
+  $('pause-retry-button').addEventListener('click', () => {
+    game.restart();
   });
   $('pause-abort-button').addEventListener('click', () => {
     game.abort();

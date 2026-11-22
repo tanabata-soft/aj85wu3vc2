@@ -275,6 +275,8 @@ export class Game {
 
   private entry: SongEntry | null = null;
   private difficulty: Difficulty = 'easy';
+  /** start で受け取った判定オフセット（中断確認の「はじめからやりなおす」で同じ条件で開始し直すため保持する） */
+  private offsetMs = 0;
   /** オートプレイ中か（設定のデバッグモード配下。start で受け取る） */
   private autoplay = false;
   private notes: PlayNote[] = [];
@@ -576,6 +578,7 @@ export class Game {
     this.paused = false;
     this.entry = entry;
     this.difficulty = difficulty;
+    this.offsetMs = offsetMs;
     this.autoplay = autoplay;
     this.speed = clampSpeed(speed);
     this.touchPosition = normalizeTouchPosition(touchPosition);
@@ -730,6 +733,19 @@ export class Game {
     this.pausePhase = 'confirm';
     setData('game', 'paused');
     this.cb.onPause(true);
+  }
+
+  /**
+   * 確認カードの「はじめからやりなおす」（オーナー指示 2026-11-22）。確認は挟まず、
+   * カードを閉じて同じ曲・難易度・設定（オフセット／オートプレイ／速度／タッチ位置）の
+   * まま start し直す。スコア・コンボ・ライフ・判定カウントは start 側でリセットされ、
+   * 曲は頭から鳴る
+   */
+  restart(): void {
+    if (!this.playing || !this.paused || this.pausePhase !== 'confirm' || !this.entry) return;
+    const entry = this.entry;
+    this.cb.onPause(false);
+    void this.start(entry, this.difficulty, this.offsetMs, this.autoplay, this.speed, this.touchPosition);
   }
 
   /** 確認カードの「つづける」。カードを閉じ、READY（1秒）をはさんで再開する */
