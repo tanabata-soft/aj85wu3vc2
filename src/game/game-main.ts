@@ -32,7 +32,7 @@ import {
   type DebugAction,
 } from '../debug';
 import { detectPlatform } from '../install';
-import { isSoundOn, playResultJingle, playSwipeSound, playUiClick, preloadHitSample, preloadResultJingle, setSound } from './sound';
+import { isSoundOn, playResultJingle, playSwipeSound, playUiClick, preloadFlickSample, preloadHitSample, preloadResultJingle, setSound } from './sound';
 import { isVibrateOn, setVibrate } from './haptics';
 import { audioContext, audioState, isUnlocked, unlockAudio } from './audio';
 import { load, migrateStorage, requestPersist, save } from './storage';
@@ -654,6 +654,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     unlockAudio();
     // ヒット音のサンプル素材も先読みしておく（最初のヒットで読み込み待ちにならないように）
     preloadHitSample();
+    // フリック音のサンプル素材も先読みしておく（最初のフリックで読み込み待ちにならないように）
+    preloadFlickSample();
     // 結果発表ジングルの素材も先読みしておく（演奏終了の瞬間に鳴らし始めるため）
     preloadResultJingle();
     const entry = songById(selectedSong);

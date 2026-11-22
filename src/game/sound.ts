@@ -1,7 +1,9 @@
 // 効果音は Web Audio で合成するのが基本。オン/オフ設定は必ず用意する。
-// 例外は音声ファイル3種だけ: ヒット音のサンプル音源と、フルコンボ演出の
+// 例外は音声ファイルだけ: ヒット音のサンプル音源と、フルコンボ演出の
 // ボイス（どちらも任意の素材スロット。src/presentation.ts と下記参照）と、
-// 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 に合成から差し替え）。
+// 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 に合成から差し替え）と、
+// フリック音のサンプル音源（オーナーが試聴プレビューから選んだ音源そのもの。
+// 2026-11-22 に合成から差し替え。下記のフリック音の節を参照）。
 // 音は、曲の再生と同じ AudioContext（src/audio.ts）を使う。
 //
 // ヒット音は「サンプル音源方式」: src/assets/hit-sample.wav（テンプレート付属の
@@ -26,6 +28,7 @@ import { audioContext, audioGeneration, audioOutput, loadBuffer } from './audio'
 import { load, save } from './storage';
 import { hitPitchMultiplier, type Judge, type Rank } from './logic';
 import hitSampleUrl from './assets/hit-sample.wav';
+import flickSampleUrl from './assets/flick-sample.wav';
 import resultJingleUrl from './assets/result-jingle.mp3';
 
 export type HitJudge = Exclude<Judge, 'miss'>;
@@ -618,87 +621,107 @@ export function playSwipeSound(): void {
 }
 
 /**
- * フリックノーツ専用のヒット音のパラメータ（判定ごと）。通常ヒット音（サンプルの
- * 打撃音）とは役割が違うので、サンプルは使わず合成で作る。
- * v1.4.3 でオーナー指示により「シャキーン」に作り替え（試聴3案から B 案を選択）:
- * 擦過音（ノイズのバンドパス上掃引）が下から上へ抜けていき、金属の響き
- * （基本音＋1.5倍＋2倍の倍音が指数減衰する）が残る、という質感。
- * 判定別: PERFECT は掃引が最も広く・長く、響きも長い。GREAT は中間、
- * GOOD は掃引が狭く短く、響きも短く鈍い。音量は従来のフリック音と同程度
- * （ヒット音サンプルの peak 0.5/0.42/0.32 より控えめ）。
+ * フリックノーツ専用のヒット音は「サンプル音源方式」（v1.4.5 で合成から切り替え）。
+ * 経緯: v1.4.1 で合成（上昇スイープ＋グリッサンド＋きらめき）、v1.4.3 で合成の
+ * 「シャキーン」に作り替えたが、オーナー評価が「しっくりこない」だった。
+ * そのため試聴プレビューで方向性（H: ヒュッ＋キラッ）を絞り、バリエーション
+ * 5案（H2〜H6）からオーナーが選んだ H2（ウッシュ強め＋チャイム1音）を、
+ * コード合成で寄せるのではなく、選ばれた音源そのものを素材として取り込んだ
+ * （オーナーに「聞いたそのままの音で入れる」と伝えてある）。
+ * 素材は src/game/assets/flick-sample.wav（0.35秒・44.1kHz・モノラル、ピーク 0.7）。
+ * MP3 化するとエンコーダ遅延でアタックがずれうるため、ヒット音サンプルと
+ * 同じく WAV のまま取り込む（ビルドで dist に出力され、Service Worker の
+ * precache に入る。workbox の globPatterns に wav あり）。
+ *
+ * 判定・tier のピッチ変化は、サンプルの playbackRate で付ける（合成時代の
+ * flickToneFor は削除した）。PERFECT が素材そのままの音（レート 1）に
+ * 一番近くなるよう、GREAT は −1 半音、GOOD は −2 半音を基準にし、
+ * tier では hitPitchMultiplier（+1 半音/tier、上限 +4）の規則を重ねる。
+ * 音量は、素材ピーク 0.7 に対するゲインで、ヒット音サンプルの出力ピーク
+ * （素材ピーク 0.9 × 0.5/0.42/0.32 ≒ 0.45/0.38/0.29）とほぼ揃う値にした。
  */
-export interface FlickToneParams {
-  /** 擦過音の掃引の開始周波数 (Hz)。tier のピッチ補正はここにかかる */
-  sweepFromHz: number;
-  /** 擦過音の掃引の終了周波数 (Hz) */
-  sweepToHz: number;
-  /** 擦過音の長さ (秒) */
-  sweepSec: number;
-  /** 擦過音の音量 */
+
+/** フリック素材の長さ（秒） */
+export const FLICK_SAMPLE_DURATION_SEC = 0.35;
+
+/** フリック素材1発の鳴らし方（判定・tier から決まる） */
+export interface FlickSampleToneParams {
+  /** 再生レート（ピッチ）。1 で素材そのままの音 */
+  rate: number;
+  /** 音量（素材のピーク 0.7 に対する再生ゲイン） */
   peak: number;
-  /** 金属の響きの基本周波数 (Hz)。倍音は FLICK_RING_PARTIALS の比率で重ねる */
-  ringHz: number;
-  /** 金属の響きの減衰時定数 (秒)。大きいほど響きが長く残る */
-  ringTauSec: number;
-  /** 金属の響きの基本倍音の音量 */
-  ringPeak: number;
 }
 
-export const FLICK_TONE: Record<HitJudge, FlickToneParams> = {
-  perfect: { sweepFromHz: 700, sweepToHz: 6500, sweepSec: 0.22, peak: 0.2, ringHz: 2093, ringTauSec: 0.09, ringPeak: 0.11 },
-  great: { sweepFromHz: 700, sweepToHz: 5600, sweepSec: 0.18, peak: 0.16, ringHz: 2093, ringTauSec: 0.07, ringPeak: 0.09 },
-  good: { sweepFromHz: 650, sweepToHz: 4200, sweepSec: 0.13, peak: 0.11, ringHz: 2093, ringTauSec: 0.045, ringPeak: 0.06 },
+/** 判定ごとのフリック素材の鳴らし方。PERFECT は素材そのまま、GOOD は低く・小さく */
+export const FLICK_SAMPLE: Record<HitJudge, FlickSampleToneParams> = {
+  perfect: { rate: 1, peak: 0.65 },
+  great: { rate: Math.pow(2, -1 / 12), peak: 0.55 },
+  good: { rate: Math.pow(2, -2 / 12), peak: 0.42 },
 };
 
-/** 金属の響きの倍音構成（基本音に対する周波数比と音量比）。金属棒を打ったような非整数次を含む並び */
-export const FLICK_RING_PARTIALS: readonly { ratio: number; amp: number }[] = [
-  { ratio: 1, amp: 1 },
-  { ratio: 1.5, amp: 0.71 },
-  { ratio: 2, amp: 0.48 },
-];
-
 /**
- * 判定と tier から、フリック音のパラメータを決める。tier ではピッチが
- * +1 半音/tier（上限 +4）上がる（合成ヒット音のフォールバックと同じ規則で、
- * logic.ts の hitPitchMultiplier を使う。合成音なのでピッチを変えても音色が壊れない）。
+ * 判定と tier から、フリック素材の鳴らし方を決める。tier ではピッチが
+ * hitPitchMultiplier の規則どおり上がる（音量は変えない）。
  */
-export function flickToneFor(judge: HitJudge, tier: number): FlickToneParams {
-  const base = FLICK_TONE[judge];
-  const mul = hitPitchMultiplier(tier);
-  return {
-    ...base,
-    sweepFromHz: base.sweepFromHz * mul,
-    sweepToHz: base.sweepToHz * mul,
-    ringHz: base.ringHz * mul,
-  };
+export function flickSampleToneFor(judge: HitJudge, tier: number): FlickSampleToneParams {
+  const base = FLICK_SAMPLE[judge];
+  return { rate: base.rate * hitPitchMultiplier(tier), peak: base.peak };
+}
+
+// フリック素材の読み込み（ヒット音サンプルと同じ保持の仕方）。
+// 読み込みに失敗したらフリック音だけ無音にする（フォールバックの合成音は持たない:
+// オーナーが選んだ音そのものが素材なので、別の音で代替しない）。
+let flickBuf: AudioBuffer | undefined;
+let flickState: 'loading' | 'ready' | 'failed' = 'loading';
+let flickLoading: Promise<AudioBuffer> | undefined;
+
+function loadFlickSample(): Promise<AudioBuffer> {
+  if (!flickLoading) {
+    flickLoading = loadBuffer(flickSampleUrl).then(
+      (buf) => {
+        flickBuf = buf;
+        flickState = 'ready';
+        return buf;
+      },
+      (err: unknown) => {
+        flickState = 'failed';
+        throw err;
+      },
+    );
+  }
+  return flickLoading;
+}
+
+/** 演奏開始のときにフリック素材を先読みしておく（最初のフリックで読み込み待ちにならないように） */
+export function preloadFlickSample(): void {
+  void loadFlickSample().catch(() => undefined);
 }
 
 /**
- * フリック音の金属の響きを鳴らす。各倍音を正弦波で、指数減衰
- * （setTargetAtTime の時定数 = ringTauSec）で重ねる。
+ * フリック素材を1発、指定した AudioContext 時刻・出口で鳴らす。
+ * レートでピッチ（と長さ）が変わる以外は素材そのまま（フィルタはかけない）。
+ * バッファがまだ読み込めていない場合は、その1発だけ諦めて読み込みを始める
+ * （演奏開始時に先読みするので、通常は起きない）。
  */
-function playFlickRing(baseHz: number, at: number, tauSec: number, peak: number, out: AudioNode): void {
-  const ac = audioContext();
-  const stopAt = at + tauSec * 8 + 0.05;
-  for (const { ratio, amp } of FLICK_RING_PARTIALS) {
-    const osc = ac.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = baseHz * ratio;
-    const gain = ac.createGain();
-    gain.gain.setValueAtTime(peak * amp, at);
-    gain.gain.setTargetAtTime(0, at, tauSec);
-    osc.connect(gain).connect(out);
-    osc.start(at);
-    osc.stop(stopAt);
+function playFlickSample(tone: FlickSampleToneParams, when: number, out: AudioNode): void {
+  if (!flickBuf) {
+    void loadFlickSample().catch(() => undefined);
+    return;
   }
+  const ac = audioContext();
+  const src = ac.createBufferSource();
+  src.buffer = flickBuf;
+  src.playbackRate.value = tone.rate;
+  const gain = ac.createGain();
+  gain.gain.setValueAtTime(tone.peak, when);
+  src.connect(gain).connect(out);
+  src.start(when);
 }
 
 /**
  * フリックノーツに当たった瞬間の専用音。通常ヒット音の代わりに鳴らす
  * （通常ノーツをフリックで叩いたときは従来の playHitSound のまま）。
- * 鳴らし方は flickToneFor のパラメータどおり: 「シャキーン」=
- * 擦過音（ノイズのバンドパス上掃引、スワイプ音より帯域を絞って鋭く）が
- * 下から上へ抜け、金属の響き（playFlickRing）が減衰しながら残る。
+ * 鳴らし方は flickSampleToneFor のパラメータどおり（素材＋レート＋音量）。
  */
 export function playFlickSound(judge: HitJudge, tier = 0): void {
   if (!enabled) return;
@@ -706,26 +729,9 @@ export function playFlickSound(judge: HitJudge, tier = 0): void {
     const ac = audioContext();
     // iPhone では操作のあとに resume が必要
     void ac.resume();
-    const tone = flickToneFor(judge, tier);
-    const t = ac.currentTime;
-    const out = hitBus();
-    // 擦過音: ノイズのバンドパス中心を掃引に沿って上へ動かす
-    const noise = ac.createBufferSource();
-    noise.buffer = getNoiseBuffer(ac);
-    const band = ac.createBiquadFilter();
-    band.type = 'bandpass';
-    band.Q.value = 2.0;
-    band.frequency.setValueAtTime(tone.sweepFromHz, t);
-    band.frequency.exponentialRampToValueAtTime(tone.sweepToHz, t + tone.sweepSec);
-    const noiseGain = ac.createGain();
-    noiseGain.gain.setValueAtTime(0.0001, t);
-    noiseGain.gain.exponentialRampToValueAtTime(tone.peak, t + tone.sweepSec * 0.25);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t + tone.sweepSec + 0.03);
-    noise.connect(band).connect(noiseGain).connect(out);
-    noise.start(t);
-    noise.stop(t + tone.sweepSec + 0.05);
-    // 金属の響き: 擦過音と同時に打ち、掃引が抜けたあとも減衰して残る
-    playFlickRing(tone.ringHz, t, tone.ringTauSec, tone.ringPeak, out);
+    if (flickState !== 'failed') {
+      playFlickSample(flickSampleToneFor(judge, tier), ac.currentTime, hitBus());
+    }
     // テストが「どの音が鳴ったか」を確認できるようにイベントを出す
     document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'flick', judge, tier } }));
   } catch {
