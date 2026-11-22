@@ -619,35 +619,43 @@ export function playSwipeSound(): void {
 
 /**
  * フリックノーツ専用のヒット音のパラメータ（判定ごと）。通常ヒット音（サンプルの
- * 打撃音）とは役割が違うので、サンプルは使わず合成で作る:
- * 「シュッ」というノイズのバンドパス上掃引に、三角波の上昇グリッサンドを重ねて
- * 上へ抜ける感じにし、終わりに高音のきらめきを添える（ジングルの sparkle と同じ発想）。
- * 判定別: PERFECT は掃引が広く・長く・きらめき2音、GREAT は中間（きらめき1音）、
- * GOOD は1オクターブだけの短い掃引できらめきなし。
- * 音量はヒット音（サンプル peak 0.5/0.42/0.32）と重なっても破綻しない控えめな値。
+ * 打撃音）とは役割が違うので、サンプルは使わず合成で作る。
+ * v1.4.3 でオーナー指示により「シャキーン」に作り替え（試聴3案から B 案を選択）:
+ * 擦過音（ノイズのバンドパス上掃引）が下から上へ抜けていき、金属の響き
+ * （基本音＋1.5倍＋2倍の倍音が指数減衰する）が残る、という質感。
+ * 判定別: PERFECT は掃引が最も広く・長く、響きも長い。GREAT は中間、
+ * GOOD は掃引が狭く短く、響きも短く鈍い。音量は従来のフリック音と同程度
+ * （ヒット音サンプルの peak 0.5/0.42/0.32 より控えめ）。
  */
 export interface FlickToneParams {
-  /** 掃引の開始周波数 (Hz)。tier のピッチ補正はここにかかる */
+  /** 擦過音の掃引の開始周波数 (Hz)。tier のピッチ補正はここにかかる */
   sweepFromHz: number;
-  /** 掃引の終了周波数 (Hz) */
+  /** 擦過音の掃引の終了周波数 (Hz) */
   sweepToHz: number;
-  /** 掃引の長さ (秒) */
+  /** 擦過音の長さ (秒) */
   sweepSec: number;
-  /** 掃引（ノイズ＋三角波）の音量 */
+  /** 擦過音の音量 */
   peak: number;
-  /** きらめきの高音 (Hz)。空なら鳴らさない。掃引の終わりから順に短く鳴らす */
-  sparkleHz: number[];
-  /** きらめき1音の長さ (秒) */
-  sparkleDurSec: number;
-  /** きらめき1音の音量 */
-  sparklePeak: number;
+  /** 金属の響きの基本周波数 (Hz)。倍音は FLICK_RING_PARTIALS の比率で重ねる */
+  ringHz: number;
+  /** 金属の響きの減衰時定数 (秒)。大きいほど響きが長く残る */
+  ringTauSec: number;
+  /** 金属の響きの基本倍音の音量 */
+  ringPeak: number;
 }
 
 export const FLICK_TONE: Record<HitJudge, FlickToneParams> = {
-  perfect: { sweepFromHz: 740, sweepToHz: 2210, sweepSec: 0.16, peak: 0.2, sparkleHz: [2637, 3520], sparkleDurSec: 0.09, sparklePeak: 0.09 },
-  great: { sweepFromHz: 740, sweepToHz: 1976, sweepSec: 0.13, peak: 0.16, sparkleHz: [2637], sparkleDurSec: 0.08, sparklePeak: 0.07 },
-  good: { sweepFromHz: 659, sweepToHz: 1319, sweepSec: 0.1, peak: 0.11, sparkleHz: [], sparkleDurSec: 0, sparklePeak: 0 },
+  perfect: { sweepFromHz: 700, sweepToHz: 6500, sweepSec: 0.22, peak: 0.2, ringHz: 2093, ringTauSec: 0.09, ringPeak: 0.11 },
+  great: { sweepFromHz: 700, sweepToHz: 5600, sweepSec: 0.18, peak: 0.16, ringHz: 2093, ringTauSec: 0.07, ringPeak: 0.09 },
+  good: { sweepFromHz: 650, sweepToHz: 4200, sweepSec: 0.13, peak: 0.11, ringHz: 2093, ringTauSec: 0.045, ringPeak: 0.06 },
 };
+
+/** 金属の響きの倍音構成（基本音に対する周波数比と音量比）。金属棒を打ったような非整数次を含む並び */
+export const FLICK_RING_PARTIALS: readonly { ratio: number; amp: number }[] = [
+  { ratio: 1, amp: 1 },
+  { ratio: 1.5, amp: 0.71 },
+  { ratio: 2, amp: 0.48 },
+];
 
 /**
  * 判定と tier から、フリック音のパラメータを決める。tier ではピッチが
@@ -661,30 +669,36 @@ export function flickToneFor(judge: HitJudge, tier: number): FlickToneParams {
     ...base,
     sweepFromHz: base.sweepFromHz * mul,
     sweepToHz: base.sweepToHz * mul,
-    sparkleHz: base.sparkleHz.map((f) => f * mul),
+    ringHz: base.ringHz * mul,
   };
 }
 
-/** フリック音のきらめきを1音鳴らす（三角波で柔らかく。ジングルの1音と同じ鳴らし方） */
-function playFlickSparkle(freq: number, at: number, durSec: number, peak: number, out: AudioNode): void {
+/**
+ * フリック音の金属の響きを鳴らす。各倍音を正弦波で、指数減衰
+ * （setTargetAtTime の時定数 = ringTauSec）で重ねる。
+ */
+function playFlickRing(baseHz: number, at: number, tauSec: number, peak: number, out: AudioNode): void {
   const ac = audioContext();
-  const osc = ac.createOscillator();
-  osc.type = 'triangle';
-  osc.frequency.value = freq;
-  const gain = ac.createGain();
-  gain.gain.setValueAtTime(0.0001, at);
-  gain.gain.exponentialRampToValueAtTime(peak, at + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, at + durSec);
-  osc.connect(gain).connect(out);
-  osc.start(at);
-  osc.stop(at + durSec + 0.02);
+  const stopAt = at + tauSec * 8 + 0.05;
+  for (const { ratio, amp } of FLICK_RING_PARTIALS) {
+    const osc = ac.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = baseHz * ratio;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(peak * amp, at);
+    gain.gain.setTargetAtTime(0, at, tauSec);
+    osc.connect(gain).connect(out);
+    osc.start(at);
+    osc.stop(stopAt);
+  }
 }
 
 /**
  * フリックノーツに当たった瞬間の専用音。通常ヒット音の代わりに鳴らす
  * （通常ノーツをフリックで叩いたときは従来の playHitSound のまま）。
- * 鳴らし方は flickToneFor のパラメータどおり: ノイズのバンドパス上掃引
- * （曲変更のスワイプ音と同じ仕組みを強めに）＋三角波の上昇グリッサンド＋きらめき。
+ * 鳴らし方は flickToneFor のパラメータどおり: 「シャキーン」=
+ * 擦過音（ノイズのバンドパス上掃引、スワイプ音より帯域を絞って鋭く）が
+ * 下から上へ抜け、金属の響き（playFlickRing）が減衰しながら残る。
  */
 export function playFlickSound(judge: HitJudge, tier = 0): void {
   if (!enabled) return;
@@ -695,40 +709,100 @@ export function playFlickSound(judge: HitJudge, tier = 0): void {
     const tone = flickToneFor(judge, tier);
     const t = ac.currentTime;
     const out = hitBus();
-    // 「シュッ」: ノイズのバンドパス中心を掃引に沿って上へ動かす
+    // 擦過音: ノイズのバンドパス中心を掃引に沿って上へ動かす
     const noise = ac.createBufferSource();
     noise.buffer = getNoiseBuffer(ac);
     const band = ac.createBiquadFilter();
     band.type = 'bandpass';
-    band.Q.value = 1.2;
-    band.frequency.setValueAtTime(tone.sweepFromHz * 0.9, t);
-    band.frequency.exponentialRampToValueAtTime(tone.sweepToHz * 1.05, t + tone.sweepSec);
+    band.Q.value = 2.0;
+    band.frequency.setValueAtTime(tone.sweepFromHz, t);
+    band.frequency.exponentialRampToValueAtTime(tone.sweepToHz, t + tone.sweepSec);
     const noiseGain = ac.createGain();
     noiseGain.gain.setValueAtTime(0.0001, t);
-    noiseGain.gain.exponentialRampToValueAtTime(tone.peak * 0.8, t + tone.sweepSec * 0.3);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t + tone.sweepSec + 0.04);
+    noiseGain.gain.exponentialRampToValueAtTime(tone.peak, t + tone.sweepSec * 0.25);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t + tone.sweepSec + 0.03);
     noise.connect(band).connect(noiseGain).connect(out);
     noise.start(t);
-    noise.stop(t + tone.sweepSec + 0.06);
-    // 上昇グリッサンド: 三角波で周波数を一気に引き上げる
-    const osc = ac.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(tone.sweepFromHz, t);
-    osc.frequency.exponentialRampToValueAtTime(tone.sweepToHz, t + tone.sweepSec);
-    const oscGain = ac.createGain();
-    oscGain.gain.setValueAtTime(0.0001, t);
-    oscGain.gain.exponentialRampToValueAtTime(tone.peak, t + 0.012);
-    oscGain.gain.setValueAtTime(tone.peak, t + tone.sweepSec);
-    oscGain.gain.exponentialRampToValueAtTime(0.0001, t + tone.sweepSec + 0.05);
-    osc.connect(oscGain).connect(out);
-    osc.start(t);
-    osc.stop(t + tone.sweepSec + 0.07);
-    // きらめき: 掃引の終わりから 0.05 秒間隔で高音を短く添える
-    tone.sparkleHz.forEach((freq, i) => {
-      playFlickSparkle(freq, t + tone.sweepSec + i * 0.05, tone.sparkleDurSec, tone.sparklePeak, out);
-    });
+    noise.stop(t + tone.sweepSec + 0.05);
+    // 金属の響き: 擦過音と同時に打ち、掃引が抜けたあとも減衰して残る
+    playFlickRing(tone.ringHz, t, tone.ringTauSec, tone.ringPeak, out);
     // テストが「どの音が鳴ったか」を確認できるようにイベントを出す
     document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'flick', judge, tier } }));
+  } catch {
+    // 音が出せなくても続行する
+  }
+}
+
+/**
+ * ミス音のパラメータ（v1.4.3 で新設。オーナーが試聴3案から G 案「ポッ」を選択）。
+ * それまで MISS 判定は無音だった。丸く柔らかい短い下降サイン音で、
+ * 音量はヒット音（サンプル peak 0.5/0.42/0.32）より小さく、
+ * 連発しても耳障りにならない控えめな値にする。
+ */
+export interface MissToneParams {
+  /** 下降の開始周波数 (Hz) */
+  fromHz: number;
+  /** 下降の終了周波数 (Hz) */
+  toHz: number;
+  /** 減衰の時定数 (秒) */
+  tauSec: number;
+  /** 立ち上がりの長さ (秒)。短いが、指数ランプで柔らかく立ち上げる */
+  attackSec: number;
+  /** 音量 */
+  peak: number;
+}
+
+export const MISS_TONE: MissToneParams = {
+  fromHz: 320,
+  toHz: 180,
+  tauSec: 0.055,
+  attackSec: 0.012,
+  peak: 0.14,
+};
+
+/** ミス音のパラメータを返す（判定や tier では変えない） */
+export function missToneFor(): MissToneParams {
+  return MISS_TONE;
+}
+
+/** ミス音の最小発音間隔 (ms)。密集地帯でミスが連続したときに重なりすぎないための抑制 */
+export const MISS_MIN_INTERVAL_MS = 60;
+
+/** 前回鳴らした時刻から見て、次に鳴らしてよいか（playMissSound の抑制判定） */
+export function missSoundDue(lastPlayedAtMs: number, nowMs: number): boolean {
+  return nowMs - lastPlayedAtMs >= MISS_MIN_INTERVAL_MS;
+}
+
+let lastMissPlayedAtMs = Number.NEGATIVE_INFINITY;
+
+/**
+ * ノーツを取り逃がした（MISS）瞬間の専用音。鳴らす経路は game.ts の
+ * MISS 確定箇所（ノーツ通過の掃除と長押しの失敗）から呼ばれる。
+ * 短時間にミスが連続する場面では MISS_MIN_INTERVAL_MS 未満の間隔の発音を抑える。
+ */
+export function playMissSound(): void {
+  if (!enabled) return;
+  const nowMs = performance.now();
+  if (!missSoundDue(lastMissPlayedAtMs, nowMs)) return;
+  lastMissPlayedAtMs = nowMs;
+  try {
+    const ac = audioContext();
+    void ac.resume();
+    const tone = missToneFor();
+    const t = ac.currentTime;
+    const osc = ac.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(tone.fromHz, t);
+    osc.frequency.exponentialRampToValueAtTime(tone.toHz, t + tone.tauSec * 2);
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(tone.peak, t + tone.attackSec);
+    gain.gain.setTargetAtTime(0, t + tone.attackSec, tone.tauSec);
+    osc.connect(gain).connect(hitBus());
+    osc.start(t);
+    osc.stop(t + tone.attackSec + tone.tauSec * 8 + 0.05);
+    // テストが「どの音が鳴ったか」を確認できるようにイベントを出す
+    document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'miss' } }));
   } catch {
     // 音が出せなくても続行する
   }

@@ -44,7 +44,7 @@ import {
 import type { SongEntry } from './charts';
 import { COMBO_PATTERNS, COMBO_SHOW_CONFIG, comboPatternDef } from './presentation';
 import { audioContext, loadBuffer, nowSeconds, playBuffer, recreateAudioContext, resumeAudio, stopCurrent, unlockAudio } from './audio';
-import { playCompleteSound, playEmptySound, playFailSound, playFlickSound, playHitSound, startHoldSound, stopAllHoldSounds, stopHoldSound } from './sound';
+import { playCompleteSound, playEmptySound, playFailSound, playFlickSound, playHitSound, playMissSound, startHoldSound, stopAllHoldSounds, stopHoldSound } from './sound';
 import { vibrateHit } from './haptics';
 import { setData } from '../debug';
 
@@ -1126,6 +1126,8 @@ export class Game {
       this.combo = 0; // コンボが切れたら tier も 0 に戻り、演出は素に戻る
       this.showJudge('miss');
       this.syncCombo();
+      // ミス音はこの掃除で1回だけ（複数ノーツ同時ミスでも重ねない。連続フレームの抑制は playMissSound 側）
+      playMissSound();
     }
 
     // 長押しの進行: tick スコア（拍ごと。音はヒット音の連打が担当し、tick 自体は鳴らさない）、
@@ -1161,6 +1163,8 @@ export class Game {
         this.holdsFailed++;
         setData('holdsFailed', this.holdsFailed);
         stopHoldSound(n);
+        // MISS の合図としてミス音も鳴らす（失敗音と役割が違うので両方鳴る）
+        playMissSound();
         playFailSound();
       }
     }
