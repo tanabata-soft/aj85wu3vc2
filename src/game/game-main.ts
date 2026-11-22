@@ -32,7 +32,7 @@ import {
   type DebugAction,
 } from '../debug';
 import { detectPlatform } from '../install';
-import { isSoundOn, playResultJingle, playSwipeSound, playUiClick, preloadHitSample, setSound } from './sound';
+import { isSoundOn, playResultJingle, playSwipeSound, playUiClick, preloadHitSample, preloadResultJingle, setSound } from './sound';
 import { isVibrateOn, setVibrate } from './haptics';
 import { audioContext, audioState, isUnlocked, unlockAudio } from './audio';
 import { load, migrateStorage, requestPersist, save } from './storage';
@@ -577,8 +577,9 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   // ---- ゲーム ----
   const game = new Game($<HTMLCanvasElement>('game-canvas'), $<HTMLCanvasElement>('notes-canvas'), {
     onFinish: (result) => {
-      // 結果発表ジングル（アプリ内合成、オーナー指示 2026-11-21 で A 案採用）を
-      // 鳴らしてから結果カードを出す。効果音オフのときはジングルなし（待ちなし）で
+      // 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 にアプリ内合成
+      // から差し替え）を鳴らし始めてから、少し待って結果カードを出す。表示までの
+      // 待ち時間は差し替え前と同じ。効果音オフのときはジングルなし（待ちなし）で
       // 即表示する。（2026-11-20 の「締めの演出は挟まず結果へ直行」はこの指示で置換。
       // フルコンボの印は従来どおり結果カードの中に出す）
       const waitMs = playResultJingle(result.rank);
@@ -653,6 +654,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     unlockAudio();
     // ヒット音のサンプル素材も先読みしておく（最初のヒットで読み込み待ちにならないように）
     preloadHitSample();
+    // 結果発表ジングルの素材も先読みしておく（演奏終了の瞬間に鳴らし始めるため）
+    preloadResultJingle();
     const entry = songById(selectedSong);
     lastEntry = entry;
     lastDiff = selectedDiff;

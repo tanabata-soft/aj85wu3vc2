@@ -1,6 +1,7 @@
 // 効果音は Web Audio で合成するのが基本。オン/オフ設定は必ず用意する。
-// 例外は音声ファイル2種だけ: ヒット音のサンプル音源と、フルコンボ演出の
-// ボイス（どちらも任意の素材スロット。src/presentation.ts と下記参照）。
+// 例外は音声ファイル3種だけ: ヒット音のサンプル音源と、フルコンボ演出の
+// ボイス（どちらも任意の素材スロット。src/presentation.ts と下記参照）と、
+// 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 に合成から差し替え）。
 // 音は、曲の再生と同じ AudioContext（src/audio.ts）を使う。
 //
 // ヒット音は「サンプル音源方式」: src/assets/hit-sample.wav（テンプレート付属の
@@ -25,6 +26,7 @@ import { audioContext, audioGeneration, audioOutput, loadBuffer } from './audio'
 import { load, save } from './storage';
 import { hitPitchMultiplier, type Judge, type Rank } from './logic';
 import hitSampleUrl from './assets/hit-sample.wav';
+import resultJingleUrl from './assets/result-jingle.mp3';
 
 export type HitJudge = Exclude<Judge, 'miss'>;
 
@@ -494,82 +496,62 @@ export async function playFullComboVoice(url?: string): Promise<void> {
 }
 
 /**
- * 結果発表ジングル（オーナー指示 2026-11-21、音源は A 案＝アプリ内合成を採用）。
- * 演奏が終わったら、まずこのファンファーレが鳴り、鳴り終わってから結果カードが
- * 出る（出す側の game-main.ts が、返ってきた長さだけ表示を遅らせる）。
- * C メジャーの上行4音（ド・ミ・ソ・ド）→ 終止和音という小さなファンファーレで、
- * S ランクのときだけ和音の前にきらめき（高音2音）を足して少し豪華にする。
+ * 結果発表ジングル（オーナー指示 2026-11-22 で、アプリ内合成からオーナー提供の
+ * 音源ファイルへ差し替え）。素材は cyber_result_sleek_triumph_3sec.wav（3.0秒）を
+ * MP3 192kbps に変換した src/game/assets/result-jingle.mp3 で、ビルドで dist に
+ * 出力され Service Worker の precache に入る（workbox の globPatterns に mp3 あり）。
+ * 旧・合成ファンファーレ（C メジャーの上行4音→終止和音、S ランクはきらめき追加）は
+ * 素材に一本化して削除した（重ね掛けもしない）。
+ *
+ * 結果カードの表示タイミングは差し替え前と変えない: 演奏が終わったらジングルを
+ * 鳴らし始め、resultJingleDurationMs の長さだけ待ってから結果カードが出る
+ * （出す側の game-main.ts が、返ってきた長さだけ表示を遅らせる）。
+ * 素材は 3.0 秒あるので、カードが出たあとも鳴り続ける（結果表示と合わせて鳴る形）。
  * 効果音のオン/オフ設定に従う: オフのときは鳴らさず、長さ 0 を返す（結果は即表示）。
  */
-export interface JingleNote {
-  /** ジングル開始からのオフセット（秒） */
-  atSec: number;
-  /** 周波数 (Hz) */
-  freq: number;
-  /** 音の長さ（秒）。この時間で指数減衰して消える */
-  durSec: number;
-  /** 音量 */
-  peak: number;
-}
 
-/** 結果発表ジングルの譜面を返す。S ランクは和音の前にきらめきが入り、少し長い */
-export function resultJingleNotes(rank: Rank): JingleNote[] {
-  const up: JingleNote[] = [
-    { atSec: 0, freq: 523.25, durSec: 0.13, peak: 0.18 },
-    { atSec: 0.12, freq: 659.25, durSec: 0.13, peak: 0.18 },
-    { atSec: 0.24, freq: 783.99, durSec: 0.13, peak: 0.18 },
-    { atSec: 0.36, freq: 1046.5, durSec: 0.18, peak: 0.2 },
-  ];
-  const sparkle: JingleNote[] =
-    rank === 'S'
-      ? [
-          { atSec: 0.56, freq: 1318.51, durSec: 0.1, peak: 0.13 },
-          { atSec: 0.66, freq: 1567.98, durSec: 0.1, peak: 0.13 },
-        ]
-      : [];
-  const chordAt = rank === 'S' ? 0.78 : 0.56;
-  const chord: JingleNote[] = [523.25, 659.25, 783.99, 1046.5].map((freq) => ({
-    atSec: chordAt,
-    freq,
-    durSec: 0.62,
-    peak: 0.085,
-  }));
-  return [...up, ...sparkle, ...chord];
-}
+/** 結果カードを出すまでの待ち時間（ms）。S ランクだけ少し長い */
+export const RESULT_JINGLE_WAIT_MS: Record<Rank, number> = {
+  S: 1480,
+  A: 1260,
+  B: 1260,
+  C: 1260,
+};
 
-/** ジングルの長さ（ms）。最後の音が消える時刻＋結果表示までの小さな間 */
+/**
+ * ジングルを鳴らしてから結果カードを出すまでの長さ（ms）。
+ * 値は差し替え前の合成ジングルの長さ（最後の音が消える時刻＋80ms）をそのまま
+ * 引き継いだもので、表示タイミングを変えないための定数。S ランクが長いのは、
+ * 旧合成で「きらめき（高音2音）」が入って和音が遅れた名残（待ち時間の差だけ残した）。
+ */
 export function resultJingleDurationMs(rank: Rank): number {
-  const endSec = Math.max(...resultJingleNotes(rank).map((n) => n.atSec + n.durSec));
-  return Math.round(endSec * 1000) + 80;
+  return RESULT_JINGLE_WAIT_MS[rank];
 }
 
-/** ジングルの1音を鳴らす（三角波で、金管っぽく柔らかく） */
-function playJingleNote(note: JingleNote, startAt: number, out: AudioNode): void {
-  const ac = audioContext();
-  const t = startAt + note.atSec;
-  const osc = ac.createOscillator();
-  osc.type = 'triangle';
-  osc.frequency.value = note.freq;
-  const gain = ac.createGain();
-  gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.exponentialRampToValueAtTime(note.peak, t + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + note.durSec);
-  osc.connect(gain).connect(out);
-  osc.start(t);
-  osc.stop(t + note.durSec + 0.02);
+/** 演奏開始のときにジングル素材を先読みしておく（結果表示で読み込み待ちにならないように） */
+export function preloadResultJingle(): void {
+  void loadBuffer(resultJingleUrl).catch(() => undefined);
 }
 
 /**
- * 結果発表ジングルを鳴らし、その長さ（ms）を返す。効果音オフ・再生失敗のときは
- * 鳴らさず 0 を返す（呼び出し側は 0 なら結果を即表示する）。
+ * 結果発表ジングル（素材ファイル）を鳴らし始めて、結果カードを出すまでの
+ * 長さ（ms）を返す。効果音オフのときは鳴らさず 0 を返す（結果は即表示）。
+ * 再生は効果音の出口（hitBus）経由で、曲の再生管理には触らない。
+ * 素材の読み込み・デコードに失敗しても、表示の流れは止めない（待ち時間は返す）。
  */
 export function playResultJingle(rank: Rank): number {
   if (!enabled) return 0;
   try {
     const ac = audioContext();
     void ac.resume();
-    const startAt = ac.currentTime + 0.02;
-    for (const note of resultJingleNotes(rank)) playJingleNote(note, startAt, hitBus());
+    void loadBuffer(resultJingleUrl)
+      .then((buf) => {
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        src.connect(hitBus());
+        src.start();
+      })
+      .catch(() => undefined);
     document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'jingle', rank } }));
     return resultJingleDurationMs(rank);
   } catch {
@@ -630,6 +612,123 @@ export function playSwipeSound(): void {
     noise.start(t);
     noise.stop(t + dur + 0.02);
     document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'swipe' } }));
+  } catch {
+    // 音が出せなくても続行する
+  }
+}
+
+/**
+ * フリックノーツ専用のヒット音のパラメータ（判定ごと）。通常ヒット音（サンプルの
+ * 打撃音）とは役割が違うので、サンプルは使わず合成で作る:
+ * 「シュッ」というノイズのバンドパス上掃引に、三角波の上昇グリッサンドを重ねて
+ * 上へ抜ける感じにし、終わりに高音のきらめきを添える（ジングルの sparkle と同じ発想）。
+ * 判定別: PERFECT は掃引が広く・長く・きらめき2音、GREAT は中間（きらめき1音）、
+ * GOOD は1オクターブだけの短い掃引できらめきなし。
+ * 音量はヒット音（サンプル peak 0.5/0.42/0.32）と重なっても破綻しない控えめな値。
+ */
+export interface FlickToneParams {
+  /** 掃引の開始周波数 (Hz)。tier のピッチ補正はここにかかる */
+  sweepFromHz: number;
+  /** 掃引の終了周波数 (Hz) */
+  sweepToHz: number;
+  /** 掃引の長さ (秒) */
+  sweepSec: number;
+  /** 掃引（ノイズ＋三角波）の音量 */
+  peak: number;
+  /** きらめきの高音 (Hz)。空なら鳴らさない。掃引の終わりから順に短く鳴らす */
+  sparkleHz: number[];
+  /** きらめき1音の長さ (秒) */
+  sparkleDurSec: number;
+  /** きらめき1音の音量 */
+  sparklePeak: number;
+}
+
+export const FLICK_TONE: Record<HitJudge, FlickToneParams> = {
+  perfect: { sweepFromHz: 740, sweepToHz: 2210, sweepSec: 0.16, peak: 0.2, sparkleHz: [2637, 3520], sparkleDurSec: 0.09, sparklePeak: 0.09 },
+  great: { sweepFromHz: 740, sweepToHz: 1976, sweepSec: 0.13, peak: 0.16, sparkleHz: [2637], sparkleDurSec: 0.08, sparklePeak: 0.07 },
+  good: { sweepFromHz: 659, sweepToHz: 1319, sweepSec: 0.1, peak: 0.11, sparkleHz: [], sparkleDurSec: 0, sparklePeak: 0 },
+};
+
+/**
+ * 判定と tier から、フリック音のパラメータを決める。tier ではピッチが
+ * +1 半音/tier（上限 +4）上がる（合成ヒット音のフォールバックと同じ規則で、
+ * logic.ts の hitPitchMultiplier を使う。合成音なのでピッチを変えても音色が壊れない）。
+ */
+export function flickToneFor(judge: HitJudge, tier: number): FlickToneParams {
+  const base = FLICK_TONE[judge];
+  const mul = hitPitchMultiplier(tier);
+  return {
+    ...base,
+    sweepFromHz: base.sweepFromHz * mul,
+    sweepToHz: base.sweepToHz * mul,
+    sparkleHz: base.sparkleHz.map((f) => f * mul),
+  };
+}
+
+/** フリック音のきらめきを1音鳴らす（三角波で柔らかく。ジングルの1音と同じ鳴らし方） */
+function playFlickSparkle(freq: number, at: number, durSec: number, peak: number, out: AudioNode): void {
+  const ac = audioContext();
+  const osc = ac.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.value = freq;
+  const gain = ac.createGain();
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + durSec);
+  osc.connect(gain).connect(out);
+  osc.start(at);
+  osc.stop(at + durSec + 0.02);
+}
+
+/**
+ * フリックノーツに当たった瞬間の専用音。通常ヒット音の代わりに鳴らす
+ * （通常ノーツをフリックで叩いたときは従来の playHitSound のまま）。
+ * 鳴らし方は flickToneFor のパラメータどおり: ノイズのバンドパス上掃引
+ * （曲変更のスワイプ音と同じ仕組みを強めに）＋三角波の上昇グリッサンド＋きらめき。
+ */
+export function playFlickSound(judge: HitJudge, tier = 0): void {
+  if (!enabled) return;
+  try {
+    const ac = audioContext();
+    // iPhone では操作のあとに resume が必要
+    void ac.resume();
+    const tone = flickToneFor(judge, tier);
+    const t = ac.currentTime;
+    const out = hitBus();
+    // 「シュッ」: ノイズのバンドパス中心を掃引に沿って上へ動かす
+    const noise = ac.createBufferSource();
+    noise.buffer = getNoiseBuffer(ac);
+    const band = ac.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 1.2;
+    band.frequency.setValueAtTime(tone.sweepFromHz * 0.9, t);
+    band.frequency.exponentialRampToValueAtTime(tone.sweepToHz * 1.05, t + tone.sweepSec);
+    const noiseGain = ac.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, t);
+    noiseGain.gain.exponentialRampToValueAtTime(tone.peak * 0.8, t + tone.sweepSec * 0.3);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t + tone.sweepSec + 0.04);
+    noise.connect(band).connect(noiseGain).connect(out);
+    noise.start(t);
+    noise.stop(t + tone.sweepSec + 0.06);
+    // 上昇グリッサンド: 三角波で周波数を一気に引き上げる
+    const osc = ac.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(tone.sweepFromHz, t);
+    osc.frequency.exponentialRampToValueAtTime(tone.sweepToHz, t + tone.sweepSec);
+    const oscGain = ac.createGain();
+    oscGain.gain.setValueAtTime(0.0001, t);
+    oscGain.gain.exponentialRampToValueAtTime(tone.peak, t + 0.012);
+    oscGain.gain.setValueAtTime(tone.peak, t + tone.sweepSec);
+    oscGain.gain.exponentialRampToValueAtTime(0.0001, t + tone.sweepSec + 0.05);
+    osc.connect(oscGain).connect(out);
+    osc.start(t);
+    osc.stop(t + tone.sweepSec + 0.07);
+    // きらめき: 掃引の終わりから 0.05 秒間隔で高音を短く添える
+    tone.sparkleHz.forEach((freq, i) => {
+      playFlickSparkle(freq, t + tone.sweepSec + i * 0.05, tone.sparkleDurSec, tone.sparklePeak, out);
+    });
+    // テストが「どの音が鳴ったか」を確認できるようにイベントを出す
+    document.dispatchEvent(new CustomEvent('app:sound', { detail: { kind: 'flick', judge, tier } }));
   } catch {
     // 音が出せなくても続行する
   }
