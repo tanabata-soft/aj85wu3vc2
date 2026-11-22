@@ -593,7 +593,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   // ---- ゲーム ----
   const game = new Game($<HTMLCanvasElement>('game-canvas'), $<HTMLCanvasElement>('notes-canvas'), {
     onFinish: (result) => {
-      // ゲームオーバー（精度下限を割った失敗）のときは、ジングルの代わりに
+      // ゲームオーバー（ライフが尽きた失敗）のときは、ジングルの代わりに
       // ゲームオーバー音（オーナー提供の音源ファイル）を鳴らし始めてから、
       // 少し待って失敗の結果カードを出す。効果音オフのときは待ちなしで即表示
       if (result.failed) {
@@ -726,7 +726,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     $('result-rank').hidden = result.failed;
     $('result-gameover').hidden = !result.failed;
     $('result-autoplay').hidden = !result.autoplay;
-    // 失敗の回にフルコンボの印は出さない（全 GOOD で精度下限を割る等、ミス 0 でも起こりうる）
+    // 失敗の回にフルコンボの印は出さない（全 GOOD でも GOOD の −1 が積もればライフは尽きうる）
     $('result-fullcombo').hidden = result.failed || !isFullCombo(result.counts);
     $('result-song').textContent = `${result.songTitle}（${DIFFICULTIES[lastDiff].label}）`;
     $('result-score').textContent = String(result.score);
@@ -782,6 +782,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       speed: speedMul,
       touchPosition,
       playing: game.isPlaying,
+      life: game.lifeValue,
       songMs: game.songPositionMs(),
       sound: isSoundOn(),
       vibrate: isVibrateOn(),
