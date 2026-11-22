@@ -186,11 +186,50 @@ export function isFullCombo(counts: JudgementCounts): boolean {
   return counts.miss === 0 && totalNotes(counts) > 0;
 }
 
+/** ランクの境目（精度 %）。C は最低ランクなので境目を持たない */
+export const RANK_THRESHOLDS: Record<Exclude<Rank, 'C'>, number> = { S: 95, A: 85, B: 70 };
+
 export function rankFor(acc: number): Rank {
-  if (acc >= 95) return 'S';
-  if (acc >= 85) return 'A';
-  if (acc >= 70) return 'B';
+  if (acc >= RANK_THRESHOLDS.S) return 'S';
+  if (acc >= RANK_THRESHOLDS.A) return 'A';
+  if (acc >= RANK_THRESHOLDS.B) return 'B';
   return 'C';
+}
+
+/** ランクの並び（低い順）。次のランクを引くために使う */
+const RANK_ORDER: readonly Rank[] = ['C', 'B', 'A', 'S'];
+
+export interface RankMeterState {
+  /** 判定済みノーツに対する現在精度 (%) */
+  accuracy: number;
+  /** 現在ランク */
+  rank: Rank;
+  /** 次のランク。すでに S なら null */
+  nextRank: Rank | null;
+  /** 次のランクまで必要な精度の差（ポイント）。S なら 0 */
+  toNext: number;
+  /** 判定済みノーツ数（精度の分母） */
+  judged: number;
+}
+
+/**
+ * 演奏中のランクメーター用の現在値。
+ * 精度は結果画面とまったく同じ accuracy(counts) を使う。結果画面では曲の終わりに
+ * 全ノーツが判定済みになるので分母が全ノーツ数になるだけで、定義は同一。
+ * 長押しの tick や完了ボーナスはスコア専用で counts に入らないため、精度には効かない
+ * （結果画面でも同じ）。
+ */
+export function rankMeterState(counts: JudgementCounts): RankMeterState {
+  const acc = accuracy(counts);
+  const rank = rankFor(acc);
+  const nextRank = RANK_ORDER[RANK_ORDER.indexOf(rank) + 1] ?? null;
+  return {
+    accuracy: acc,
+    rank,
+    nextRank,
+    toNext: nextRank === null ? 0 : Math.max(0, RANK_THRESHOLDS[nextRank as Exclude<Rank, 'C'>] - acc),
+    judged: totalNotes(counts),
+  };
 }
 
 /** 長押しの頭の判定（ミス以外） */
