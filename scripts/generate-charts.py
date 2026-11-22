@@ -71,6 +71,18 @@ v6-1 の変更点:
   (2) 間隔フィルタでサビ内フリックをサビ外より優先する2段化、を入れた。
   写像の内訳はレポートの flickAnchorStats（サビごとに exact/fallback/
   dropped）に出る。
+- V6-3 フリック先決め＋流れ整形・流れ検証（flick: True の曲だけ。OFF は無変更）:
+  オーナー指摘「フリックのある場所が気持ちよくない」への対策。従来は通常譜面を
+  作り切ってから既存ノーツを変換するだけだったため、フリック周りの配置が
+  タップ前提のままだった。v6-3 では (1) アンカーを難易度導出より前に確定し、
+  候補プールにピン留めして間引き・修復で落とさない、(2) 生成後にフリック
+  直前の窓（easy 2拍／normal 1.5拍／hard 1拍）のパターンノーツを間引いて
+  溜めを作り、直後の同レーンに回復ウィンドウ（300ms）を空ける整形、
+  (3) 届く難易度すべてで流れ（直前500msの密度・直後の同レーン間隔・
+  フリック間隔）を検査し、違反したフリックは ±1拍以内の落ち着いた適格
+  ノーツへずらす／無理なら落とす検証、を行う。フリック総数は SONGS の
+  flick_budget（v1.4.16 実績）を上限とし、超過分は優先度の低いものから
+  rank を上げて収める。移動・削除はレポートの flickFlowLog に理由付きで残る。
 
 v5 の変更点（根拠は docs/CHART-DESIGN.md の「譜面 v5」節、曲別方針は SONGS のメタデータ）:
 - V5-1 特徴量レイヤー: HPSS で打撃成分（ドラム）と持続成分を分け、持続成分の
@@ -182,6 +194,7 @@ SONGS = {
         "chorus_layer": "vocal",
         "chorus_bonus": 0.5,
         "flick": True,
+        "flick_budget": {'easy': 11, 'normal': 17, 'hard': 22},
     },
     "saki": {
         "title": "頂点のその先へ",
@@ -191,6 +204,7 @@ SONGS = {
         "chorus_layer": "vocal",
         "chorus_bonus": 0.5,
         "flick": True,
+        "flick_budget": {'easy': 12, 'normal': 17, 'hard': 23},
     },
     "kizu": {
         "title": "きずだらけのまま",
@@ -200,6 +214,7 @@ SONGS = {
         "chorus_layer": "vocal",
         "chorus_bonus": 0.5,
         "flick": True,
+        "flick_budget": {'easy': 6, 'normal': 11, 'hard': 13},
     },
 }
 
@@ -1015,7 +1030,7 @@ def run_is_allowed(diff, run):
     )
 
 
-def repair_runs(id_sets, notes_by_id):
+def repair_runs(id_sets, notes_by_id, protected=frozenset()):
     """3連続ルールを全難易度で直す。落としたノーツは下位難易度からも落とす（入れ子を保つ）。"""
     order = ["hard", "normal", "easy"]
     for di, diff in enumerate(order):
@@ -1029,13 +1044,14 @@ def repair_runs(id_sets, notes_by_id):
                     break
             if bad is None:
                 break
-            mid = bad[len(bad) // 2]
+            pool = [n for n in bad if n["id"] not in protected] or list(bad)
+            mid = pool[len(pool) // 2]
             for lower in order[di:]:
                 id_sets[lower].discard(mid["id"])
     return id_sets
 
 
-def repair_side_runs(id_sets, notes_by_id, chord_ids):
+def repair_side_runs(id_sets, notes_by_id, chord_ids, protected=frozenset()):
     """両親指制約 C3a/C3b の違反を直す（check-two-thumb.py と同じ定義）。
 
     難易度ごとの部分列で数え直す必要がある（間引きで隣接関係が変わるため）。
@@ -1095,7 +1111,9 @@ def repair_side_runs(id_sets, notes_by_id, chord_ids):
                         break
             if target is None:
                 break
-            pool = [n for n in target if n["id"] not in chord_ids] or list(target)
+            pool = [
+                n for n in target if n["id"] not in chord_ids and n["id"] not in protected
+            ] or list(target)
             victim = pool[len(pool) // 2]
             for lower in order[di:]:
                 id_sets[lower].discard(victim["id"])
@@ -1958,7 +1976,7 @@ def process_song(song_id, meta, y, sr):
         elif n["sub"] % 2 == 0:
             normal_ids.add(n["id"])
 
-    def thin(ids, cap, min_gap, fever_w=1.2):
+    def thin(ids, cap, min_gap, fever_w=1.2, pinned=frozenset()):
         """レーンごとに強さ順の列を持ち、往復で均等に拾って間引く。
 
         候補プール自体が偏っていても分布が 18〜32% に収まるよう、総数は
@@ -1983,6 +2001,15 @@ def process_song(song_id, meta, y, sr):
         kept_times = []
         lane_kept = [0, 0, 0, 0]
         ptr = {l: 0 for l in range(4)}
+        # v6-3: ピン留めノーツ（フリックのアンカー）は間引きで落とさず先に確定する
+        for n in sorted(
+            (notes_by_id[i] for i in ids if i in pinned),
+            key=lambda n: (n["time_ms"], n["lane"]),
+        ):
+            kept.append(n)
+            kept_times.append(n["time_ms"])
+            lane_kept[n["lane"]] += 1
+        kept_ids = {n["id"] for n in kept}
 
         def gap_ok(n):
             return all(t == n["time_ms"] or abs(n["time_ms"] - t) >= min_gap for t in kept_times)
@@ -1996,9 +2023,12 @@ def process_song(song_id, meta, y, sr):
                 while ptr[l] < len(by_lane[l]):
                     n = by_lane[l][ptr[l]]
                     ptr[l] += 1
+                    if n["id"] in kept_ids:
+                        continue
                     if gap_ok(n):
                         kept.append(n)
                         kept_times.append(n["time_ms"])
+                        kept_ids.add(n["id"])
                         lane_kept[l] += 1
                         progress = True
                         break
@@ -2181,20 +2211,32 @@ def process_song(song_id, meta, y, sr):
             ids.add(n["id"])
         return ids
 
+    # v6-3: フリックのアンカーは難易度導出でピン留めし、修復でも優先的に残す
+    flick_pin = {"normal": set(), "easy": set()}
+    flick_protected = set()
+    if meta.get("flick"):
+        for n in notes:
+            r = n.get("flick_rank")
+            if r is not None:
+                flick_protected.add(n["id"])
+                if r <= 1:
+                    flick_pin["normal"].add(n["id"])
+                if r <= 0:
+                    flick_pin["easy"].add(n["id"])
     normal_pool = set(normal_ids)
-    normal_ids, normal_target = thin(normal_ids, NORMAL_CAP, 150)
+    normal_ids, normal_target = thin(normal_ids, NORMAL_CAP, 150, pinned=flick_pin["normal"])
     easy_pre_thin = {i for i in normal_ids if notes_by_id[i]["sub"] == 0 and notes_by_id[i]["kind"] != "chord"}
     easy_ids = set(easy_pre_thin)
     # easy は拍位置のみで候補が少なく、サビが16分中心になるとサビの取り分が
     # 構造的に減るため、FEVER 優先の重みを normal より強める（2026-11-20）
-    easy_ids, easy_target = thin(easy_ids, EASY_CAP, 260, fever_w=1.6)
+    easy_ids, easy_target = thin(easy_ids, EASY_CAP, 260, fever_w=1.6, pinned=flick_pin["easy"])
     id_sets = {"hard": hard_ids, "normal": normal_ids, "easy": easy_ids}
     # 同一レーン修復と両親指修復は、片方の「落とす」が他方の違反（連の接続）を
     # 作ることがあるので、どちらも動かなくなるまで交互に回す（落とすだけなので収束する）
     for _ in range(50):
         before = {d: len(s) for d, s in id_sets.items()}
-        id_sets = repair_runs(id_sets, notes_by_id)
-        id_sets = repair_side_runs(id_sets, notes_by_id, chord_ids)
+        id_sets = repair_runs(id_sets, notes_by_id, protected=flick_protected)
+        id_sets = repair_side_runs(id_sets, notes_by_id, chord_ids, protected=flick_protected)
         if all(len(id_sets[d]) == before[d] for d in before):
             break
     else:
@@ -2253,12 +2295,298 @@ def process_song(song_id, meta, y, sr):
             break
         for _ in range(50):
             before_r = {d: len(s) for d, s in id_sets.items()}
-            id_sets = repair_runs(id_sets, notes_by_id)
-            id_sets = repair_side_runs(id_sets, notes_by_id, chord_ids)
+            id_sets = repair_runs(id_sets, notes_by_id, protected=flick_protected)
+            id_sets = repair_side_runs(id_sets, notes_by_id, chord_ids, protected=flick_protected)
             if all(len(id_sets[d]) == before_r[d] for d in before_r):
                 break
         else:
             raise AssertionError(f"{song_id}: 密度下限ガード後の修復が収束しない")
+
+    # v6-3: フリックの流れ整形と流れ検証（flick: True の曲だけ。OFF の曲は無変更）
+    # 整形: フリック直前の窓ではパターンノーツを間引いて「溜め」を作り、
+    #   フリック直後の同レーンには回復ウィンドウを空ける。落とす集合は
+    #   hard ⊆ normal ⊆ easy の順に積み増し、入れ子を保つ。
+    # 検証: 届く難易度すべてで流れを検査し、引っかかったフリックは
+    #   ±1拍以内の落ち着いた適格ノーツへずらす。無理なら落とす。
+    # 上限: SONGS の flick_budget（難易度別の現行実績）を超える場合は、
+    #   優先度の低いフリックから rank を上げて（最終的には外して）収める。
+    flick_final_report = []
+    flow_log = []
+    shape_stats = {"preDropped": 0, "postDropped": 0}
+    if meta.get("flick"):
+        FLICK_PRE_WINDOW_BEATS = {"easy": 2.0, "normal": 1.5, "hard": 1.0}
+        FLICK_PRE_DENSITY_MS = 500
+        FLICK_PRE_DENSITY_MAX = {"easy": 1, "normal": 2, "hard": 3}
+        FLICK_RECOVERY_MS = 300
+        FLICK_SAME_LANE_MS = 250
+        rank_max_of = {"easy": 0, "normal": 1, "hard": 2}
+        flick_meta = {nid: (rs, kd) for nid, (_n, rs, kd) in selected.items()}
+        flick_notes = {n["id"]: n for n in notes if n.get("flick_rank") is not None}
+
+        def delivered(diff):
+            rm = rank_max_of[diff]
+            return sorted(
+                (
+                    notes_by_id[i]
+                    for i in id_sets[diff]
+                    if notes_by_id[i].get("flick_rank") is not None
+                    and notes_by_id[i]["flick_rank"] <= rm
+                ),
+                key=lambda n: (n["time_ms"], n["lane"]),
+            )
+
+        # ---- 整形（入れ子を保つ階層落とし） ----
+        drop_acc = set()
+        for diff in ("hard", "normal", "easy"):
+            win_ms = FLICK_PRE_WINDOW_BEATS[diff] * period * 1000
+            for fn in delivered(diff):
+                t = fn["time_ms"]
+                for n in notes:
+                    nid = n["id"]
+                    if nid not in id_sets[diff] or nid in flick_notes or nid in drop_acc:
+                        continue
+                    if (
+                        t - win_ms <= n["time_ms"] < t
+                        and n["kind"] == "pattern"
+                        and n["hold_ms"] == 0
+                    ):
+                        drop_acc.add(nid)
+                        shape_stats["preDropped"] += 1
+                    elif n["lane"] == fn["lane"] and t < n["time_ms"] <= t + FLICK_RECOVERY_MS:
+                        drop_acc.add(nid)
+                        shape_stats["postDropped"] += 1
+            id_sets[diff] -= drop_acc
+
+        # 整形の落としで生じた同一レーン連・両親指違反を修復し直す
+        # （ノーツを落とすと同レーンが隣接して連ができるため。落とすだけ
+        # なので収束する。フリックは protected で優先的に残す）
+        for _ in range(50):
+            before = {d: len(s) for d, s in id_sets.items()}
+            id_sets = repair_runs(id_sets, notes_by_id, protected=flick_protected)
+            id_sets = repair_side_runs(
+                id_sets, notes_by_id, chord_ids, protected=flick_protected
+            )
+            if all(len(id_sets[d]) == before[d] for d in before):
+                break
+        else:
+            raise AssertionError(f"{song_id}: 整形後の修復が収束しない")
+
+        # ---- 流れ検証 ----
+        def flick_times_in(diff, exclude_id=None):
+            rm = rank_max_of[diff]
+            return sorted(
+                notes_by_id[i]["time_ms"]
+                for i in id_sets[diff]
+                if i != exclude_id
+                and notes_by_id[i].get("flick_rank") is not None
+                and notes_by_id[i]["flick_rank"] <= rm
+            )
+
+        def flow_problems(diff, cand, other_times):
+            ids = id_sets[diff]
+            t = cand["time_ms"]
+            probs = []
+            pre = sum(
+                1
+                for i in ids
+                if t - FLICK_PRE_DENSITY_MS <= notes_by_id[i]["time_ms"] < t
+            )
+            if pre > FLICK_PRE_DENSITY_MAX[diff]:
+                probs.append(f"pre-density:{pre}>{FLICK_PRE_DENSITY_MAX[diff]}")
+            lane_after = [
+                notes_by_id[i]["time_ms"]
+                for i in ids
+                if notes_by_id[i]["lane"] == cand["lane"] and notes_by_id[i]["time_ms"] > t
+            ]
+            if lane_after and min(lane_after) - t < FLICK_RECOVERY_MS:
+                probs.append(f"post-lane:{min(lane_after) - t}<{FLICK_RECOVERY_MS}")
+            for ot in other_times:
+                if abs(ot - t) < FLICK_GAP_MS[diff]:
+                    probs.append(f"flick-gap:{abs(ot - t)}<{FLICK_GAP_MS[diff]}")
+                    break
+            return probs
+
+        def shift_candidates(fn, rank):
+            t0 = fn["time_ms"]
+            hard_ids = id_sets["hard"]
+            time_count_h = {}
+            for i in hard_ids:
+                tt = notes_by_id[i]["time_ms"]
+                time_count_h[tt] = time_count_h.get(tt, 0) + 1
+            lane_times_h = {}
+            for i in hard_ids:
+                lane_times_h.setdefault(notes_by_id[i]["lane"], []).append(
+                    notes_by_id[i]["time_ms"]
+                )
+            out = []
+            for cn in notes:
+                if cn["id"] == fn["id"] or cn.get("flick_rank") is not None:
+                    continue
+                if cn["id"] not in hard_ids or cn["hold_ms"] > 0:
+                    continue
+                if abs(cn["time_ms"] - t0) > period * 1000:
+                    continue
+                if time_count_h[cn["time_ms"]] > 1:
+                    continue
+                near = [
+                    x
+                    for x in lane_times_h[cn["lane"]]
+                    if abs(x - cn["time_ms"]) < FLICK_SAME_LANE_MS
+                ]
+                if len(near) > 1:
+                    continue
+                saved = fn["flick_rank"]
+                fn["flick_rank"] = None
+                ok = True
+                score = 0
+                for diff in ("easy", "normal", "hard"):
+                    if rank > rank_max_of[diff] or cn["id"] not in id_sets[diff]:
+                        continue
+                    pr = flow_problems(diff, cn, flick_times_in(diff, exclude_id=fn["id"]))
+                    if pr:
+                        ok = False
+                        break
+                    score += sum(
+                        1
+                        for i in id_sets[diff]
+                        if cn["time_ms"] - FLICK_PRE_DENSITY_MS
+                        <= notes_by_id[i]["time_ms"]
+                        < cn["time_ms"]
+                    )
+                fn["flick_rank"] = saved
+                if ok:
+                    out.append((score, abs(cn["time_ms"] - t0), cn["time_ms"], cn["lane"], cn))
+            out.sort(key=lambda c: (c[0], c[1], c[2], c[3]))
+            return out
+
+        for fn in sorted(flick_notes.values(), key=lambda n: (n["time_ms"], n["lane"])):
+            rank = fn.get("flick_rank")
+            if rank is None:
+                continue
+            diffs_in = [
+                d
+                for d in ("easy", "normal", "hard")
+                if rank <= rank_max_of[d] and fn["id"] in id_sets[d]
+            ]
+            problems = {}
+            for d in diffs_in:
+                pr = flow_problems(d, fn, flick_times_in(d, exclude_id=fn["id"]))
+                if pr:
+                    problems[d] = pr
+            if diffs_in and not problems:
+                continue
+            reason0 = flick_meta.get(fn["id"], ("?", "?"))[0]
+            cands = shift_candidates(fn, rank)
+            if cands:
+                cn = cands[0][4]
+                fn["flick_rank"] = None
+                cn["flick_rank"] = rank
+                flick_meta[cn["id"]] = flick_meta.get(fn["id"], ("?", "?"))
+                flick_notes[cn["id"]] = cn
+                del flick_notes[fn["id"]]
+                flow_log.append(
+                    {
+                        "action": "replace" if not diffs_in else "shift",
+                        "from": fn["time_ms"],
+                        "fromLane": fn["lane"],
+                        "to": cn["time_ms"],
+                        "toLane": cn["lane"],
+                        "rank": rank,
+                        "reason": reason0,
+                        "problems": problems,
+                    }
+                )
+            else:
+                fn["flick_rank"] = None
+                del flick_notes[fn["id"]]
+                flow_log.append(
+                    {
+                        "action": "lost" if not diffs_in else "drop",
+                        "from": fn["time_ms"],
+                        "fromLane": fn["lane"],
+                        "rank": rank,
+                        "reason": reason0,
+                        "problems": problems,
+                    }
+                )
+
+        # ---- 上限（flick_budget）への収納: rank を上げる／外す ----
+        budget = meta.get("flick_budget") or {}
+        kind_rank = {"exact": 2, "fallback": 1, "outside": 0}
+        reason_rank = {
+            "chorus-entry": 5,
+            "phrase-head": 4,
+            "accent": 3,
+            "f0-jump": 2,
+            "phrase-final": 1,
+            "pre-chorus": 0,
+        }
+
+        def keep_key(n):
+            rs, kd = flick_meta.get(n["id"], ("?", "?"))
+            return (
+                kind_rank.get(kd, 0),
+                reason_rank.get(rs, 0),
+                n["strength"],
+                -n["time_ms"],
+            )
+
+        for diff in ("easy", "normal", "hard"):
+            cap = budget.get(diff)
+            if cap is None:
+                continue
+            rm = rank_max_of[diff]
+            while True:
+                cur = [
+                    n
+                    for n in flick_notes.values()
+                    if n.get("flick_rank") is not None
+                    and n["flick_rank"] <= rm
+                    and n["id"] in id_sets[diff]
+                ]
+                if len(cur) <= cap:
+                    break
+                cur.sort(key=keep_key)
+                victim = cur[0]
+                if diff == "hard":
+                    victim["flick_rank"] = None
+                    del flick_notes[victim["id"]]
+                    flow_log.append(
+                        {
+                            "action": "budget-remove",
+                            "from": victim["time_ms"],
+                            "fromLane": victim["lane"],
+                            "rank": rm,
+                            "reason": flick_meta.get(victim["id"], ("?", "?"))[0],
+                            "problems": {"budget": diff},
+                        }
+                    )
+                else:
+                    old_rank = victim["flick_rank"]
+                    victim["flick_rank"] = rm + 1
+                    flow_log.append(
+                        {
+                            "action": "budget-raise",
+                            "from": victim["time_ms"],
+                            "fromLane": victim["lane"],
+                            "rank": old_rank,
+                            "reason": flick_meta.get(victim["id"], ("?", "?"))[0],
+                            "problems": {"budget": diff},
+                        }
+                    )
+        flick_final_report = sorted(
+            (
+                {
+                    "time": n["time_ms"],
+                    "lane": n["lane"],
+                    "reason": flick_meta.get(n["id"], ("?", "?"))[0],
+                    "rank": n["flick_rank"],
+                }
+                for n in flick_notes.values()
+                if n.get("flick_rank") is not None
+            ),
+            key=lambda r: (r["time"], r["lane"]),
+        )
 
     def final_notes(diff, ids):
         seq = sorted((notes_by_id[i] for i in ids), key=lambda n: (n["time_ms"], n["lane"]))
@@ -2352,6 +2680,9 @@ def process_song(song_id, meta, y, sr):
         "motifSimThr": round(motif_sim_thr, 3) if v5 else None,
         "flickPositions": flick_report,
         "flickAnchorStats": anchor_stats,
+        "flickPositionsFinal": flick_final_report,
+        "flickFlowLog": flow_log,
+        "flickShapeStats": shape_stats,
     }
     print(f"{song_id}: BPM={bpm:.2f} -> {int(round(bpm))} counts={counts}")
     print(f"  diffs={json.dumps(rep['diffs'], ensure_ascii=False)} lanes={rep['lanes']}")
