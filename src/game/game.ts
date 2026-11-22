@@ -11,6 +11,7 @@ import {
   HOLD_TICK_SCORE,
   LANE_COLORS,
   SPEED_DEFAULT,
+  TOUCH_POSITION_DEFAULT,
   advanceHold,
   beginHold,
   clampSpeed,
@@ -21,11 +22,13 @@ import {
   findFlickHit,
   findHit,
   findNearestNote,
+  hitYRatio,
   isComboShow,
   isGameOver,
   GAME_OVER_ACCURACY_FLOOR,
   lyricIndexAt,
   makePlayNotes,
+  normalizeTouchPosition,
   rankFor,
   rankMeterState,
   accuracy,
@@ -43,6 +46,7 @@ import {
   type JudgementCounts,
   type PlayNote,
   type Rank,
+  type TouchPosition,
 } from './logic';
 import type { SongEntry } from './charts';
 import { COMBO_PATTERNS, COMBO_SHOW_CONFIG, comboPatternDef } from './presentation';
@@ -77,7 +81,8 @@ export interface GameCallbacks {
   onLyric(index: number): void;
 }
 
-const HIT_Y_RATIO = 0.82;
+// 判定ラインの高さはタッチ位置設定（logic.ts の hitYRatio）で決まる:
+// standard = H×0.82（従来位置）、high = H×0.74。Game.hitY() を参照
 const READY_SECONDS = 2;
 /** 左上の中断ボタン（描画とタップ判定で共有する。オーナー指示 2026-11-21: × ではなく「❚❚ 中断」） */
 const PAUSE_BTN = { x: 10, y: 10, w: 100, h: 38 };
@@ -306,6 +311,13 @@ export class Game {
   private pointerGestures = new Map<number, { startY: number; startWall: number; flicked: boolean }>();
   /** 音符の落下速度の倍率（プレイヤー設定。start で受け取る） */
   private speed = SPEED_DEFAULT;
+  /** タッチ位置（判定ラインの高さ。プレイヤー設定。start で受け取る） */
+  private touchPosition: TouchPosition = TOUCH_POSITION_DEFAULT;
+
+  /** 判定ラインの y 座標（px）。タッチ位置設定に追随する */
+  private hitY(): number {
+    return this.height * hitYRatio(this.touchPosition);
+  }
   /** 押さえ中のキー（レーン） */
   private keyLanes = new Set<number>();
   private holdsCompleted = 0;
@@ -516,8 +528,15 @@ export class Game {
     return (nowSeconds() - this.startAt) * 1000;
   }
 
-  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率（プレイヤー設定） */
-  async start(entry: SongEntry, difficulty: Difficulty, offsetMs: number, autoplay = false, speed = SPEED_DEFAULT): Promise<void> {
+  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率、touchPosition は判定ラインの高さ（どちらもプレイヤー設定） */
+  async start(
+    entry: SongEntry,
+    difficulty: Difficulty,
+    offsetMs: number,
+    autoplay = false,
+    speed = SPEED_DEFAULT,
+    touchPosition: TouchPosition = TOUCH_POSITION_DEFAULT,
+  ): Promise<void> {
     // スタート操作のジェスチャの中で呼ばれる前提で、まず音声を unlock する
     unlockAudio();
     const session = ++this.startSession;
@@ -538,6 +557,7 @@ export class Game {
     this.difficulty = difficulty;
     this.autoplay = autoplay;
     this.speed = clampSpeed(speed);
+    this.touchPosition = normalizeTouchPosition(touchPosition);
     setData('autoplay', autoplay ? 'on' : 'off');
     this.notes = makePlayNotes(entry.data.charts[difficulty], offsetMs);
     this.counts = emptyCounts();
@@ -742,7 +762,7 @@ export class Game {
     const lw = this.width / 4;
     this.ripples.push({
       x: rippleX ?? lane * lw + lw / 2,
-      y: rippleY ?? this.height * HIT_Y_RATIO,
+      y: rippleY ?? this.hitY(),
       age: 0,
       life: RIPPLE_LIFE,
       c: LANE_COLORS[lane],
@@ -843,7 +863,7 @@ export class Game {
       this.flash[n.lane] = 1;
       this.ripples.push({
         x: n.lane * lw + lw / 2,
-        y: this.height * HIT_Y_RATIO,
+        y: this.hitY(),
         age: 0,
         life: RIPPLE_LIFE,
         c: LANE_COLORS[n.lane],
@@ -946,7 +966,7 @@ export class Game {
     const fx = tierFx(tier);
     const lw = this.width / 4;
     const cx = lane * lw + lw / 2;
-    const cy = this.height * HIT_Y_RATIO;
+    const cy = this.hitY();
     const c = LANE_COLORS[lane];
     this.pops.push({ lane, age: 0, life: POP_LIFE, c, maxScale: 1.5 * fx.popMul });
     this.rings.push({
@@ -978,7 +998,7 @@ export class Game {
     const fx = tierFx(tier);
     const lw = this.width / 4;
     const cx = lane * lw + lw / 2;
-    const cy = this.height * HIT_Y_RATIO;
+    const cy = this.hitY();
     const c = LANE_COLORS[lane];
     const n = Math.round((level === 0 ? 14 : level === 1 ? 10 : 7) * fx.particleMul);
     for (let i = 0; i < n; i++) {
@@ -1311,7 +1331,7 @@ export class Game {
       g.strokeRect(edge.width / 2 + 1, edge.width / 2 + 1, W - edge.width - 2, H - edge.width - 2);
     }
     const lw = W / 4;
-    const hy = H * HIT_Y_RATIO;
+    const hy = H * hitYRatio(this.touchPosition);
     // このフレームの演出段階（コンボのみで決まる）。フラッシュとコンボ表示に使う
     const frameFx = tierFx(tier);
     for (let i = 0; i < 4; i++) {

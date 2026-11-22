@@ -5,7 +5,9 @@ import {
   findFlickHit,
   findHit,
   findNearestNote,
+  hitYRatio,
   isGameOver,
+  normalizeTouchPosition,
   makePlayNotes,
   rankFor,
   rankMeterState,
@@ -184,6 +186,23 @@ describe('速度調整（clampSpeed / effectiveFallSeconds）', () => {
     expect(effectiveFallSeconds(2.0, 2.0)).toBe(1.0);
     expect(effectiveFallSeconds(1.6, 0.8)).toBe(2.0);
     expect(effectiveFallSeconds(1.3, 1.3)).toBe(1.0);
+  });
+});
+
+describe('タッチ位置（normalizeTouchPosition / hitYRatio）', () => {
+  it('判定ラインの比率は standard = 0.82（従来位置）、high = 0.74（約8%上）', () => {
+    expect(hitYRatio('standard')).toBe(0.82);
+    expect(hitYRatio('high')).toBe(0.74);
+    expect(hitYRatio('standard') - hitYRatio('high')).toBeCloseTo(0.08);
+  });
+
+  it('正規化は high だけを通し、それ以外は既定の standard', () => {
+    expect(normalizeTouchPosition('high')).toBe('high');
+    expect(normalizeTouchPosition('standard')).toBe('standard');
+    expect(normalizeTouchPosition('up')).toBe('standard');
+    expect(normalizeTouchPosition(undefined)).toBe('standard');
+    expect(normalizeTouchPosition(null)).toBe('standard');
+    expect(normalizeTouchPosition(1)).toBe('standard');
   });
 });
 
