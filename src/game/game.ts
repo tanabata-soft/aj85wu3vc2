@@ -178,6 +178,10 @@ const JUDGE_LIFE = 0.55;
 const FLICK_CHEVRON_GAP_PX = 11;
 /** フリックノーツの中をシェブロンが上へ流れる速さ (px/秒)。間隔1つ分を 0.25 秒で進む */
 const FLICK_CHEVRON_FLOW_PX_PER_SEC = 44;
+/** フリックノーツの輪郭色（ほぼ黒に近い紺）とシェブロンの色（水色）。見た目改善の案A（2026-11-23）:
+ * 白枠＋白シェブロンはレーン色に溶けて見にくいというオーナー指摘への対処 */
+const FLICK_OUTLINE_COLOR = '#0a1030';
+const FLICK_CHEVRON_COLOR = '#3fd9ff';
 /** フリック成功時に飛ぶシェブロンの寿命（秒）と上昇距離 (px) */
 const FLICK_CHEV_LIFE = 0.35;
 const FLICK_CHEV_RISE_PX = 60;
@@ -1452,39 +1456,47 @@ export class Game {
       if (n.state !== 0 || n.holdMs > 0) continue;
       const y = hy - ((n.timeMs - nowMs) / 1000 / fall) * hy;
       if (y < -30 || y > H + 30) continue;
+      // フリックノーツは通常ノーツより一回り大きく描く（見た目改善の案A、2026-11-23）
+      const nx = n.lane * lw + (n.flick ? 5 : 8);
+      const nw = lw - (n.flick ? 10 : 16);
+      const nh = n.flick ? 34 : 28;
+      const nr = n.flick ? 9 : 8;
       gn.fillStyle = LANE_COLORS[n.lane];
       gn.beginPath();
-      gn.roundRect(n.lane * lw + 8, y - 14, lw - 16, 28, 8);
+      gn.roundRect(nx, y - nh / 2, nw, nh, nr);
       gn.fill();
       if (n.flick) {
-        // フリックノーツの目印: 白い輪郭＋ノーツの中で上へ流れ続ける白シェブロン（∧）。
-        // 「上へ弾く」ことが動きで伝わるようにする（オーナー決定 2026-11-22 の A 案）。
+        // フリックノーツの目印: 濃色（ほぼ黒に近い紺）の太い輪郭＋ノーツの中で
+        // 上へ流れ続ける太い水色シェブロン（∧）。白枠＋白シェブロンではレーン色に
+        // 溶けて見にくいというオーナー指摘（「フリック音符がみにくい。白枠だからか？？」）
+        // を受けての見た目改善・案A（2026-11-23）。上へ流れ続ける動き自体は
+        // オーナー決定 2026-11-22 の A 案のまま変えていない。
         // シェブロンはノーツの形でクリップし、上下端付近では薄くして、
         // 循環して流れ続ける見え方にする。位相は描画時刻（frameAt）から決める
         const cx = n.lane * lw + lw / 2;
-        gn.strokeStyle = '#fff';
-        gn.lineWidth = 2.5;
+        gn.strokeStyle = FLICK_OUTLINE_COLOR;
+        gn.lineWidth = 5;
         gn.beginPath();
-        gn.roundRect(n.lane * lw + 11, y - 11, lw - 22, 22, 6);
+        gn.roundRect(nx + 3, y - nh / 2 + 3, nw - 6, nh - 6, 7);
         gn.stroke();
         gn.save();
         gn.beginPath();
-        gn.roundRect(n.lane * lw + 8, y - 14, lw - 16, 28, 8);
+        gn.roundRect(nx, y - nh / 2, nw, nh, nr);
         gn.clip();
         const flow = (frameAt * FLICK_CHEVRON_FLOW_PX_PER_SEC) % FLICK_CHEVRON_GAP_PX;
-        gn.strokeStyle = '#fff';
-        gn.lineWidth = 3;
+        gn.strokeStyle = FLICK_CHEVRON_COLOR;
+        gn.lineWidth = 4.5;
         gn.lineJoin = 'round';
         for (let k = 0; k < 4; k++) {
-          const cy = y + 16 - flow - k * FLICK_CHEVRON_GAP_PX;
+          const cy = y + 18 - flow - k * FLICK_CHEVRON_GAP_PX;
           // 中心で最も濃く、上下端へ向けて消える（端で出入りが目立たないように）
-          const fade = 1 - Math.min(1, Math.abs(cy - y) / 15);
+          const fade = 1 - Math.min(1, Math.abs(cy - y) / 18);
           if (fade <= 0) continue;
           gn.globalAlpha = fade;
           gn.beginPath();
-          gn.moveTo(cx - 9, cy + 5);
-          gn.lineTo(cx, cy - 5);
-          gn.lineTo(cx + 9, cy + 5);
+          gn.moveTo(cx - 11, cy + 6);
+          gn.lineTo(cx, cy - 6);
+          gn.lineTo(cx + 11, cy + 6);
           gn.stroke();
         }
         gn.restore();
@@ -1565,8 +1577,9 @@ export class Game {
       const rise = FLICK_CHEV_RISE_PX * (1 - (1 - k) * (1 - k));
       const s = 11 + 3 * k;
       gn.globalAlpha = 0.95 * (1 - k);
-      gn.strokeStyle = '#fff';
-      gn.lineWidth = 3.5;
+      // 成功シェブロンもノーツ側と同じ水色にそろえる（見た目改善の案A、2026-11-23）
+      gn.strokeStyle = FLICK_CHEVRON_COLOR;
+      gn.lineWidth = 4;
       gn.lineJoin = 'round';
       gn.beginPath();
       gn.moveTo(f.x - s, f.y - rise + s * 0.55);
