@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FLICK_SAMPLE, FLICK_SAMPLE_DURATION_SEC, MISS_MIN_INTERVAL_MS, flickSampleToneFor, missSoundDue, missToneFor, resultJingleDurationMs } from '../src/game/sound';
+import { FLICK_SAMPLE, FLICK_SAMPLE_DURATION_SEC, GAME_OVER_WAIT_MS, MISS_MIN_INTERVAL_MS, flickSampleToneFor, missSoundDue, missToneFor, resultJingleDurationMs } from '../src/game/sound';
 import { hitPitchMultiplier } from '../src/game/logic';
 
 describe('結果発表ジングル（素材ファイルへの差し替え後）', () => {
@@ -14,6 +14,14 @@ describe('結果発表ジングル（素材ファイルへの差し替え後）'
 
   it('S ランクだけ待ち時間が長い（旧合成できらめきが入っていた名残）', () => {
     expect(resultJingleDurationMs('S')).toBeGreaterThan(resultJingleDurationMs('A'));
+  });
+});
+
+describe('ゲームオーバー音（素材ファイル）', () => {
+  it('結果カードを出すまでの待ち時間は、素材（3.0秒）の頭が聞き取れる長さ', () => {
+    expect(GAME_OVER_WAIT_MS).toBe(1500);
+    expect(GAME_OVER_WAIT_MS).toBeGreaterThan(0);
+    expect(GAME_OVER_WAIT_MS).toBeLessThan(3000);
   });
 });
 

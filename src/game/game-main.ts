@@ -32,7 +32,7 @@ import {
   type DebugAction,
 } from '../debug';
 import { detectPlatform } from '../install';
-import { isSoundOn, playResultJingle, playSwipeSound, playUiClick, preloadFlickSample, preloadHitSample, preloadResultJingle, setSound } from './sound';
+import { isSoundOn, playGameOverSound, playResultJingle, playSwipeSound, playUiClick, preloadFlickSample, preloadGameOverSound, preloadHitSample, preloadResultJingle, setSound } from './sound';
 import { isVibrateOn, setVibrate } from './haptics';
 import { audioContext, audioState, isUnlocked, unlockAudio } from './audio';
 import { load, migrateStorage, requestPersist, save } from './storage';
@@ -577,6 +577,18 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   // ---- ゲーム ----
   const game = new Game($<HTMLCanvasElement>('game-canvas'), $<HTMLCanvasElement>('notes-canvas'), {
     onFinish: (result) => {
+      // ゲームオーバー（精度下限を割った失敗）のときは、ジングルの代わりに
+      // ゲームオーバー音（オーナー提供の音源ファイル）を鳴らし始めてから、
+      // 少し待って失敗の結果カードを出す。効果音オフのときは待ちなしで即表示
+      if (result.failed) {
+        const waitMs = playGameOverSound();
+        if (waitMs > 0) {
+          window.setTimeout(() => showResult(result), waitMs);
+        } else {
+          showResult(result);
+        }
+        return;
+      }
       // 結果発表ジングル（オーナー提供の音源ファイル。2026-11-22 にアプリ内合成
       // から差し替え）を鳴らし始めてから、少し待って結果カードを出す。表示までの
       // 待ち時間は差し替え前と同じ。効果音オフのときはジングルなし（待ちなし）で
@@ -658,6 +670,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     preloadFlickSample();
     // 結果発表ジングルの素材も先読みしておく（演奏終了の瞬間に鳴らし始めるため）
     preloadResultJingle();
+    // ゲームオーバー音の素材も先読みしておく（確定の瞬間に鳴らし始めるため）
+    preloadGameOverSound();
     const entry = songById(selectedSong);
     lastEntry = entry;
     lastDiff = selectedDiff;
@@ -683,23 +697,28 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     const bests = loadBests();
     const key = bestKey(lastEntry.id, lastDiff);
     // オートプレイの結果はベストスコアに残さない（表示は保存済みのベストのまま）。
+    // ゲームオーバー（失敗）の結果もベストスコア・ベストランクを更新しない。
     // ベストを更新したときは、その回のランクも一緒に保存する（メニューのパネルに出す）
     const prev = bests[key];
-    const best = result.autoplay ? (prev?.score ?? 0) : Math.max(prev?.score ?? 0, result.score);
-    if (!result.autoplay && result.score >= (prev?.score ?? 0)) {
+    const best = result.autoplay || result.failed ? (prev?.score ?? 0) : Math.max(prev?.score ?? 0, result.score);
+    if (!result.autoplay && !result.failed && result.score >= (prev?.score ?? 0)) {
       bests[key] = { score: best, rank: result.rank };
       save('best', bests);
     }
     $('result-rank').textContent = result.rank;
+    $('result-gameover').hidden = !result.failed;
     $('result-autoplay').hidden = !result.autoplay;
-    $('result-fullcombo').hidden = !isFullCombo(result.counts);
+    // 失敗の回にフルコンボの印は出さない（全 GOOD で精度下限を割る等、ミス 0 でも起こりうる）
+    $('result-fullcombo').hidden = result.failed || !isFullCombo(result.counts);
     $('result-song').textContent = `${result.songTitle}（${DIFFICULTIES[lastDiff].label}）`;
     $('result-score').textContent = String(result.score);
     $('result-best').textContent = String(best);
     $('result-counts').textContent = `PERFECT ${result.counts.perfect} / GREAT ${result.counts.great} / GOOD ${result.counts.good} / MISS ${result.counts.miss}`;
     $('result-accuracy').textContent = result.accuracy.toFixed(1);
     $('result-combo').textContent = String(result.maxCombo);
-    $('game-live').textContent = `結果: ランク${result.rank}、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${isFullCombo(result.counts) ? '、フルコンボ' : ''}${result.autoplay ? '（オートプレイ）' : ''}`;
+    // 失敗の回は「次の曲」へ進めない（もう一度／メニューへのみ）
+    $('next-button').hidden = result.failed;
+    $('game-live').textContent = `結果: ${result.failed ? 'ゲームオーバー、' : ''}ランク${result.rank}、スコア${result.score}、精度${result.accuracy.toFixed(1)}%${isFullCombo(result.counts) && !result.failed ? '、フルコンボ' : ''}${result.autoplay ? '（オートプレイ）' : ''}`;
     show('result');
     renderMenu();
   }

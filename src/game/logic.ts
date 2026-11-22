@@ -232,6 +232,33 @@ export function rankMeterState(counts: JudgementCounts): RankMeterState {
   };
 }
 
+/**
+ * ゲームオーバーの下限（精度 %）。ランク帯に下限を新設する概念で、C の帯は
+ * 50〜70 とし、50 未満は「圏外」。結果ランクの定義（rankFor）とは別で、
+ * rankFor は従来どおり 50 未満でも C を返す（下限はゲームオーバー専用の概念）。
+ * オーナー指示 2026-11-22: ライフゲージは作らず、ランクメーターの精度そのものを
+ * ゲームオーバーの条件にする（「ランクメーターが一定以下になるとゲームオーバー」
+ * 「C割ったらは？」を具体化）。
+ */
+export const GAME_OVER_ACCURACY_FLOOR = 50;
+
+/**
+ * ゲームオーバーの猶予（判定済みノーツ数）。序盤は1ミスで精度が 0% になって
+ * 即死するのを防ぐため、判定済みがこの数を超えるまでは発動しない。
+ */
+export const GAME_OVER_GRACE_NOTES = 20;
+
+/**
+ * ゲームオーバー状態か（現在精度が下限を割ったか）。
+ * 精度は rankMeterState と同じ accuracy(counts)（判定済みノーツに対する現在値）。
+ * ちょうど下限（50.0%）は「割っていない」のでゲームオーバーにしない。
+ * オートプレイで発動させないのは呼び出し側（game.ts）の責務。
+ */
+export function isGameOver(counts: JudgementCounts): boolean {
+  if (totalNotes(counts) <= GAME_OVER_GRACE_NOTES) return false;
+  return accuracy(counts) < GAME_OVER_ACCURACY_FLOOR;
+}
+
 /** 長押しの頭の判定（ミス以外） */
 export type HeadJudge = Exclude<Judge, 'miss'>;
 
