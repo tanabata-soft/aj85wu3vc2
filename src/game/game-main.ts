@@ -460,6 +460,10 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     },
     onFinish: (stats) => {
       latencyResult = stats;
+      // 計測が終わったら、その場でオフセットへ自動で反映する（反映ボタンは廃止した）。
+      // 符号は logic.ts の遅延チェックの約束どおり: 拍より遅れてタップした量（+）を
+      // そのままオフセットにする（ノーツの判定時刻が後ろへずれて、遅れを打ち消せる）
+      setOffset(Math.round(stats.meanMs));
       latencyUi = 'done';
       renderLatency();
     },
@@ -467,38 +471,34 @@ function initGameMode(): { enter: () => void; exit: () => void } {
 
   function renderLatency(): void {
     setData('latency', latencyUi);
-    const start = $<HTMLButtonElement>('latency-start');
     const tap = $<HTMLButtonElement>('latency-tap');
     if (latencyUi === 'idle') {
-      $('latency-status').textContent = '「スタート」を押すと拍が流れます';
       $('latency-result').hidden = true;
       tap.disabled = true;
-      start.disabled = false;
-      start.textContent = 'スタート';
     } else if (latencyUi === 'running') {
       $('latency-result').hidden = true;
       tap.disabled = false;
-      start.disabled = true;
     } else {
       if (latencyResult) {
-        const mean = Math.round(latencyResult.meanMs);
-        $('latency-mean').textContent = `${mean > 0 ? '+' : ''}${mean}ms`;
-        $('latency-std').textContent = String(Math.round(latencyResult.stddevMs));
+        // 表示は、実際にオフセットへ入った値（10ms刻みに丸め・範囲内に収めたもの）に合わせる
+        const applied = clampOffset(Math.round(latencyResult.meanMs));
+        $('latency-mean').textContent = `${applied > 0 ? '+' : ''}${applied}ms`;
       }
       $('latency-status').textContent = '計測が終わりました';
       $('latency-result').hidden = false;
       tap.disabled = true;
-      start.disabled = false;
-      start.textContent = 'もう一度測る';
     }
   }
 
   function openLatency(): void {
+    // 開いたらすぐ計測を始める（スタートボタンは廃止した）
     latencyCheck.stop();
-    latencyUi = 'idle';
+    latencyUi = 'running';
     latencyResult = null;
     renderLatency();
     if (!latencyDialog.open) latencyDialog.showModal();
+    unlockAudio();
+    latencyCheck.start();
   }
   function closeLatency(): void {
     latencyCheck.stop();
@@ -506,30 +506,16 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   }
   $('latency-open').addEventListener('click', openLatency);
   $('latency-close').addEventListener('click', closeLatency);
-  $('latency-cancel').addEventListener('click', closeLatency);
   latencyDialog.addEventListener('close', () => {
-    // Esc・✕・「やめる」で閉じた場合も、計測を止めて何も反映しない
+    // Esc・✕で閉じた場合も計測を止める。途中で閉じたら何も反映しない
+    // （反映は計測が終わった瞬間にだけ行うので、完了後に閉じても反映済みのまま）
     latencyCheck.stop();
     latencyUi = 'idle';
     latencyResult = null;
     renderLatency();
   });
-  $('latency-start').addEventListener('click', () => {
-    unlockAudio();
-    latencyUi = 'running';
-    latencyResult = null;
-    renderLatency();
-    latencyCheck.start();
-  });
   // タップは pointerdown で受ける（click より遅延が小さい。ゲーム本体の入力と同じ方式）
   $('latency-tap').addEventListener('pointerdown', () => latencyCheck.tap());
-  $('latency-apply').addEventListener('click', () => {
-    if (!latencyResult) return;
-    // 符号は logic.ts の遅延チェックの約束どおり: 拍より遅れてタップした量（+）を
-    // そのままオフセットにする（ノーツの判定時刻が後ろへずれて、遅れを打ち消せる）
-    setOffset(Math.round(latencyResult.meanMs));
-    closeLatency();
-  });
   renderLatency();
 
   // ---- コンボ演出の登場（30コンボごと）と歌詞表示 ----

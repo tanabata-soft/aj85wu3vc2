@@ -116,10 +116,10 @@ export function hitYRatio(position: TouchPosition): number {
 
 /** 遅延チェックの拍の速さ (BPM)。1拍 1000ms で、落ち着いて合わせられる速さにする */
 export const LATENCY_BPM = 60;
-/** 必要なタップ回数 */
-export const LATENCY_TAP_COUNT = 10;
+/** 必要なタップ回数（簡略化で 10 → 6。手間と精度の釣り合いで決めた） */
+export const LATENCY_TAP_COUNT = 6;
 /** 練習として捨てる最初のタップ回数 */
-export const LATENCY_DROP_COUNT = 2;
+export const LATENCY_DROP_COUNT = 1;
 /** 直前のタップからこの間隔 (ms) 未満のタップは、二度押しとして数えない */
 export const LATENCY_MIN_TAP_GAP_MS = 200;
 

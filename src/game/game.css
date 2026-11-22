@@ -1047,20 +1047,6 @@
   margin: 6px 0 10px;
 }
 
-#view-game .latency-apply {
-  width: 100%;
-  min-height: 48px;
-}
-
-#view-game .latency-actions {
-  justify-content: center;
-  margin-top: 12px;
-}
-
-#view-game .latency-actions .opt {
-  flex: 1;
-}
-
 /* ---------- CD 側へ同居させるための調整（エンジン側） ---------- */
 /* .view（CD 側）は height: 100dvh の flex。リズムゲーム画面は中をスクロールさせる */
 #view-game {

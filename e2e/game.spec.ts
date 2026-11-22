@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 // リズムゲーム（デジタルCDエンジンのモジュール）の E2E。CD 側の画面遷移（data-view）と
 // リズムゲーム側の状態（data-screen / data-song / data-difficulty / data-game）の
@@ -78,6 +78,67 @@ test('設定ダイアログが開閉できる', async ({ page }) => {
   await expect(page.locator('#settings-dialog .dialog-version')).toHaveCount(0);
   await page.locator('#settings-close').click();
   await expect(page.locator('#settings-dialog')).toBeHidden();
+});
+
+/** 遅延チェックのタップを、数えられたことを表示で確認しながら1回分押す。
+ *  計測は AudioContext の時計で二度押し（200ms 未満）を弾くため、実時計の固定待ちでは
+ *  環境によって間隔が詰まって数えられないことがある。表示が進むまで打ち直す */
+async function tapLatency(page: Page, expectedStatus: string): Promise<void> {
+  await expect(async () => {
+    await page.locator('#latency-tap').dispatchEvent('pointerdown');
+    await expect(page.locator('#latency-status')).toHaveText(expectedStatus, { timeout: 300 });
+  }).toPass({ timeout: 10_000 });
+}
+
+test('遅延チェックは開いたらすぐ始まり、6タップで自動でオフセットに反映される', async ({ page }) => {
+  await page.locator('#btn-open-game').click();
+  await page.locator('#settings-open').click();
+  await expect(page.locator('#settings-dialog')).toBeVisible();
+  await expect(page.locator('body')).toHaveAttribute('data-offset', '0');
+  await page.locator('#latency-open').click();
+  await expect(page.locator('#latency-dialog')).toBeVisible();
+  // スタート・やめる・反映ボタンは廃止した
+  await expect(page.locator('#latency-start')).toHaveCount(0);
+  await expect(page.locator('#latency-cancel')).toHaveCount(0);
+  await expect(page.locator('#latency-apply')).toHaveCount(0);
+  // 開いた時点で計測が始まっていて、タップが受け付けられる
+  await expect(page.locator('body')).toHaveAttribute('data-latency', 'running');
+  await expect(page.locator('#latency-tap')).toBeEnabled();
+  await expect(page.locator('#latency-status')).toHaveText('タップ 0 / 6');
+  // 6回タップする（6回目は完了してステータスが変わる）
+  for (let n = 1; n <= 5; n++) await tapLatency(page, `タップ ${n} / 6`);
+  await tapLatency(page, '計測が終わりました');
+  // 完了したら結果だけが出て、オフセットへ自動で反映されている
+  await expect(page.locator('#latency-result')).toBeVisible();
+  await expect(page.locator('#latency-status')).toHaveText('計測が終わりました');
+  const meanText = await page.locator('#latency-mean').textContent();
+  const applied = Number.parseInt(meanText ?? '0', 10);
+  await expect(page.locator('body')).toHaveAttribute('data-offset', String(applied));
+  await expect(page.locator('#latency-tap')).toBeDisabled();
+  // 閉じても反映済みのまま
+  await page.locator('#latency-close').click();
+  await expect(page.locator('#latency-dialog')).toBeHidden();
+  await expect(page.locator('body')).toHaveAttribute('data-offset', String(applied));
+  await expect(page.locator('#offset-value')).toHaveText(`${applied > 0 ? '+' : ''}${applied}ms`);
+});
+
+test('遅延チェックを途中で閉じたらオフセットは変わらない', async ({ page }) => {
+  await page.locator('#btn-open-game').click();
+  await page.locator('#settings-open').click();
+  await expect(page.locator('#settings-dialog')).toBeVisible();
+  // 先に手動で +10 にしておく
+  await page.locator('#offset-plus').click();
+  await expect(page.locator('body')).toHaveAttribute('data-offset', '10');
+  await page.locator('#latency-open').click();
+  await expect(page.locator('#latency-dialog')).toBeVisible();
+  await expect(page.locator('body')).toHaveAttribute('data-latency', 'running');
+  // 2回だけタップして、終わる前に閉じる
+  await tapLatency(page, 'タップ 1 / 6');
+  await tapLatency(page, 'タップ 2 / 6');
+  await page.locator('#latency-close').click();
+  await expect(page.locator('#latency-dialog')).toBeHidden();
+  await expect(page.locator('body')).toHaveAttribute('data-offset', '10');
+  await expect(page.locator('#offset-value')).toHaveText('+10ms');
 });
 
 test('タッチ位置を「上」に変えると判定ラインが上がり、設定が保存される', async ({ page }) => {
