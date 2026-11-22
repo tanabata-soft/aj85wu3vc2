@@ -619,3 +619,55 @@ test('フリックノーツは上フリックで取れる（タップでは取�
   // フリックで取れていればスコアが入る（タップだけでは取れないノーツ）
   await expect(page.locator('body')).not.toHaveAttribute('data-score', '0', { timeout: 5_000 });
 });
+
+test('フリックノーツはキーボードでもそのまま叩ける', async ({ page }) => {
+  test.setTimeout(90_000);
+  // 既定の曲・難易度（warae / easy）の最初のフリックノーツを譜面から読む
+  const charts = JSON.parse(readFileSync(new URL('../src/game/data/charts.json', import.meta.url), 'utf8')) as Record<
+    string,
+    { charts: Record<string, [number, number, number?, string?][]> }
+  >;
+  const firstFlick = charts['warae'].charts['easy'].find((n) => n[3] === 'flick');
+  expect(firstFlick).toBeDefined();
+  const [flickMs, flickLane] = firstFlick!;
+
+  // テスト用の入口（getGameState）を使うため ?debug=1 で開き直す
+  await page.goto('/?debug=1');
+  await page.locator('#btn-open-game').click();
+  // フリック音（ノーツ種別に紐づく音）が鳴ったことを記録する
+  await page.evaluate(() => {
+    const w = window as unknown as { __flickSound: boolean };
+    w.__flickSound = false;
+    document.addEventListener('app:sound', (e) => {
+      if ((e as CustomEvent).detail?.kind === 'flick') w.__flickSound = true;
+    });
+  });
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+
+  const songMs = (): Promise<number> =>
+    page.evaluate(() => {
+      const api = (window as unknown as { __pwaTest?: { getGameState?: () => { songMs: number } } }).__pwaTest;
+      return api?.getGameState?.().songMs ?? -1;
+    });
+  // フリックノーツの少し手前まで曲位置を待つ（判定窓 ±160ms の内側でキーを押す）
+  for (;;) {
+    const ms = await songMs();
+    if (ms >= flickMs - 100) break;
+    await page.waitForTimeout(30);
+  }
+  // そのレーンのキー（D/F/J/K）を押して離す。キーボードではフリックノーツも
+  // 通常のキー押しでそのまま取れる（オーナー指示 2026-11-22）
+  await page.evaluate(
+    ({ key }) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+    },
+    { key: 'dfjk'[flickLane] },
+  );
+  // キー押しで取れていればスコアが入り、フリックノーツ本来の音も鳴る
+  await expect(page.locator('body')).not.toHaveAttribute('data-score', '0', { timeout: 5_000 });
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __flickSound: boolean }).__flickSound))
+    .toBe(true);
+});
