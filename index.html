@@ -223,17 +223,12 @@
           <h2 id="latency-title">遅延チェック</h2>
           <button id="latency-close" type="button" class="dialog-close" aria-label="遅延チェックを閉じる">✕</button>
         </div>
-        <p class="note">拍の音が鳴る瞬間（丸が光る瞬間）に合わせて、「タップ」を押してください。10回タップすると、最初の2回を練習として除いた平均のずれを測ります。計測中は拍の音が鳴ります。</p>
+        <p class="note">拍の音に合わせてタップしてください。6回タップすると、ずれを測って自動でオフセットに反映します。</p>
         <div id="latency-flash" class="latency-flash" aria-hidden="true"></div>
-        <p id="latency-status" class="latency-status" aria-live="polite">「スタート」を押すと拍が流れます</p>
+        <p id="latency-status" class="latency-status" aria-live="polite">タップ 0 / 6</p>
         <button id="latency-tap" type="button" class="latency-tap" disabled>タップ</button>
         <div id="latency-result" class="latency-result" hidden>
-          <p class="latency-result-text">平均のずれ <strong id="latency-mean">+0ms</strong>（ばらつき ±<span id="latency-std">0</span>ms）</p>
-          <button id="latency-apply" type="button" class="primary latency-apply">この値をオフセットに反映する</button>
-        </div>
-        <div class="row latency-actions">
-          <button id="latency-start" type="button" class="opt">スタート</button>
-          <button id="latency-cancel" type="button" class="opt">やめる</button>
+          <p class="latency-result-text"><strong id="latency-mean">+0ms</strong> に合わせました</p>
         </div>
       </dialog>
     </section>

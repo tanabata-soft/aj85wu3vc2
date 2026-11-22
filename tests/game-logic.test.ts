@@ -15,6 +15,9 @@ import {
   isLifeGameOver,
   lifeZone,
   normalizeTouchPosition,
+  LATENCY_DROP_COUNT,
+  LATENCY_TAP_COUNT,
+  latencyStats,
   isNewBest,
   makePlayNotes,
   rankFor,
@@ -349,5 +352,25 @@ describe('ライフ制（案1：メーターとゲームオーバー）', () => 
   it('結果ランクの定義は変えない（精度 50% 未満でも rankFor は C）', () => {
     expect(rankFor(49.9)).toBe('C');
     expect(rankFor(0)).toBe('C');
+  });
+});
+
+describe('遅延チェック（簡略化：6タップ・自動反映の前提）', () => {
+  it('必要タップ数は 6、練習として捨てるのは最初の 1 回', () => {
+    expect(LATENCY_TAP_COUNT).toBe(6);
+    expect(LATENCY_DROP_COUNT).toBe(1);
+  });
+
+  it('6タップ分のズレから、最初を捨てた残り5回の平均を出す', () => {
+    // 最初の 999 は練習として捨てられる
+    const stats = latencyStats([999, 30, 40, 50, 60, 70]);
+    expect(stats).not.toBeNull();
+    expect(stats!.usedCount).toBe(5);
+    expect(stats!.meanMs).toBe(50);
+  });
+
+  it('タップが練習分しかなければ null（反映しない）', () => {
+    expect(latencyStats([10])).toBeNull();
+    expect(latencyStats([])).toBeNull();
   });
 });
