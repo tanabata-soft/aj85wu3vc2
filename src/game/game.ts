@@ -12,6 +12,11 @@ import {
   LANE_COLORS,
   HIT_Y_RATIO,
   SPEED_DEFAULT,
+  VISUALIZER_CIRCLE_BARS,
+  VISUALIZER_DEFAULT,
+  VISUALIZER_FREQ_BARS,
+  groupFreqBins,
+  normalizeVisualizerStyle,
   advanceHold,
   beginHold,
   clampSpeed,
@@ -46,10 +51,11 @@ import {
   type JudgementCounts,
   type PlayNote,
   type Rank,
+  type VisualizerStyle,
 } from './logic';
 import type { SongEntry } from './charts';
 import { COMBO_PATTERNS, COMBO_SHOW_CONFIG, comboPatternDef } from './presentation';
-import { audioContext, loadBuffer, nowSeconds, playBuffer, recreateAudioContext, resumeAudio, stopCurrent, unlockAudio } from './audio';
+import { audioContext, loadBuffer, musicAnalyser, nowSeconds, playBuffer, recreateAudioContext, resumeAudio, stopCurrent, unlockAudio } from './audio';
 import { playCompleteSound, playEmptySound, playFailSound, playFlickSound, playHitSound, playMissSound, startHoldSound, stopAllHoldSounds, stopHoldSound } from './sound';
 import { vibrateHit } from './haptics';
 import { setData } from '../debug';
@@ -189,6 +195,24 @@ const FLICK_ARROW_PULSE_PERIOD_SEC = 0.85;
 const FLICK_ARROW_PULSE_MAX = 1.15;
 /** フリック成功時に飛ぶシェブロンの色（水色。演出は従来どおり） */
 const FLICK_CHEVRON_COLOR = '#3fd9ff';
+
+// ---- オーディオビジュアライザー（プレイ画面の下部スペース） ----
+// タッチ位置「上」固定で空いた判定ラインの下の領域に、曲の周波数・波形を描く。
+// 色味はスタイル選定プレビュー（~/workspace/nks006-visualizer-preview）で検証した
+// 控えめな色をそのまま使う。領域はプレビューの 390×844 基準（x 12..378、
+// 判定枠の下端+14px 〜 下端-10px）を実ステージの比率へ写して決める。
+/** 周波数バー: 下端→上端のグラデーション（控えめなティール→シアン） */
+const VIZ_BAR_BOTTOM = '#2e6f79';
+const VIZ_BAR_TOP = '#6fb3bd';
+/** 波形ライン: 芯の色と薄いグローの色（ソフトなラベンダー） */
+const VIZ_WAVE_CORE = '#bdb2e4';
+const VIZ_WAVE_GLOW = '#9a8fc7';
+/** ミラーバー: 中心軸側→先端側（スモークブルー） */
+const VIZ_MIRROR_AXIS = '#54687f';
+const VIZ_MIRROR_TIP = '#93aed0';
+/** 円形: 放射バーと土台リング（くすんだアンバー） */
+const VIZ_CIRCLE_BAR = '#c7a15a';
+const VIZ_CIRCLE_RING = '#8a6f3c';
 /** フリック成功時に飛ぶシェブロンの寿命（秒）と上昇距離 (px) */
 const FLICK_CHEV_LIFE = 0.35;
 const FLICK_CHEV_RISE_PX = 60;
@@ -341,6 +365,12 @@ export class Game {
   private hitY(): number {
     return this.height * HIT_Y_RATIO;
   }
+  // ビジュアライザーのスタイル（プレイヤー設定。start で受け取る）
+  private visualizerStyle: VisualizerStyle = VISUALIZER_DEFAULT;
+  // 解析データの使い回しバッファと、取得の間引きカウンタ（2フレームに1回だけ取る）
+  private vizFreq: Uint8Array<ArrayBuffer> | null = null;
+  private vizWave: Uint8Array<ArrayBuffer> | null = null;
+  private vizFrame = 0;
   /** 押さえ中のキー（レーン） */
   private keyLanes = new Set<number>();
   private holdsCompleted = 0;
@@ -559,13 +589,14 @@ export class Game {
     return (nowSeconds() - this.startAt) * 1000;
   }
 
-  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率（プレイヤー設定） */
+  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率、visualizer はビジュアライザーのスタイル（どちらもプレイヤー設定） */
   async start(
     entry: SongEntry,
     difficulty: Difficulty,
     offsetMs: number,
     autoplay = false,
     speed = SPEED_DEFAULT,
+    visualizer: VisualizerStyle = VISUALIZER_DEFAULT,
   ): Promise<void> {
     // スタート操作のジェスチャの中で呼ばれる前提で、まず音声を unlock する
     unlockAudio();
@@ -588,6 +619,7 @@ export class Game {
     this.offsetMs = offsetMs;
     this.autoplay = autoplay;
     this.speed = clampSpeed(speed);
+    this.visualizerStyle = normalizeVisualizerStyle(visualizer);
     setData('autoplay', autoplay ? 'on' : 'off');
     this.notes = makePlayNotes(entry.data.charts[difficulty], offsetMs);
     this.counts = emptyCounts();
@@ -751,7 +783,7 @@ export class Game {
     if (!this.playing || !this.paused || this.pausePhase !== 'confirm' || !this.entry) return;
     const entry = this.entry;
     this.cb.onPause(false);
-    void this.start(entry, this.difficulty, this.offsetMs, this.autoplay, this.speed);
+    void this.start(entry, this.difficulty, this.offsetMs, this.autoplay, this.speed, this.visualizerStyle);
   }
 
   /** 確認カードの「つづける」。カードを閉じ、READY（1秒）をはさんで再開する */
@@ -1162,6 +1194,132 @@ export class Game {
     }
   }
 
+  /**
+   * オーディオビジュアライザー: 判定枠の下の空き領域に、再生中の曲の周波数・
+   * 波形を描く。データは audio.ts の曲専用アナライザから取る（効果音は混ざらない）。
+   * 取得は2フレームに1回（約30Hz）に間引く。アナライザが無い（音声が未生成の）
+   * ときは何も描かない。曲が始まる前（READY 中）は無音データで静かな形になる。
+   * 色味と寸法はスタイル選定プレビュー（390×844 基準）で検証した値を実ステージへ
+   * 比率で写したもの。
+   */
+  private drawVisualizer(g: CanvasRenderingContext2D, W: number, H: number): void {
+    const analyser = musicAnalyser();
+    if (!analyser) return;
+    // 領域: 横はプレビューの x 12..378（390 基準）、上端は判定枠の下端（hy+14）の
+    // 14px 下、下端は画面の下端の 10px 上（844 基準）
+    const x0 = (W * 12) / 390;
+    const x1 = (W * 378) / 390;
+    const y0 = this.hitY() + 28;
+    const y1 = H - (H * 10) / 844;
+    const bandH = y1 - y0;
+    if (bandH < 40 || x1 - x0 < 80) return;
+    const cy = (y0 + y1) / 2;
+    const scale = W / 390;
+
+    if (!this.vizFreq || this.vizFreq.length !== analyser.frequencyBinCount) {
+      this.vizFreq = new Uint8Array(analyser.frequencyBinCount);
+      this.vizWave = new Uint8Array(analyser.fftSize);
+    }
+    const freq = this.vizFreq;
+    const wave = this.vizWave;
+    if (!freq || !wave) return;
+    this.vizFrame++;
+    if (this.vizFrame % 2 === 1) {
+      analyser.getByteFrequencyData(freq);
+      analyser.getByteTimeDomainData(wave);
+    }
+    const sampleRate = analyser.context.sampleRate;
+
+    if (this.visualizerStyle === 'bars' || this.visualizerStyle === 'mirror') {
+      const vals = groupFreqBins(freq, VISUALIZER_FREQ_BARS, sampleRate);
+      const slot = (x1 - x0) / vals.length;
+      const bw = slot * 0.62;
+      if (this.visualizerStyle === 'bars') {
+        // 周波数バー: 下端から伸びる。下→上のグラデーション＋上端のキャップ
+        const grad = g.createLinearGradient(0, y1, 0, y0);
+        grad.addColorStop(0, VIZ_BAR_BOTTOM);
+        grad.addColorStop(1, VIZ_BAR_TOP);
+        for (let i = 0; i < vals.length; i++) {
+          const h = Math.max(2, vals[i] * bandH * 0.92);
+          const x = x0 + i * slot + (slot - bw) / 2;
+          g.globalAlpha = 215 / 255;
+          g.fillStyle = grad;
+          g.fillRect(x, y1 - h, bw, h);
+          g.globalAlpha = 230 / 255;
+          g.fillStyle = VIZ_BAR_TOP;
+          g.beginPath();
+          g.roundRect(x, y1 - h, bw, 4, 2);
+          g.fill();
+        }
+      } else {
+        // ミラーバー: 中心軸から上下対称に伸びる。値が大きいほど先端の色へ寄る
+        const half = (bandH / 2) * 0.92;
+        for (let i = 0; i < vals.length; i++) {
+          const h = Math.max(1.5, vals[i] * half);
+          const x = x0 + i * slot + (slot - bw) / 2;
+          g.globalAlpha = 205 / 255;
+          g.fillStyle = tintColor(VIZ_MIRROR_AXIS, VIZ_MIRROR_TIP, Math.min(1, vals[i] * 1.4));
+          g.fillRect(x, cy - h, bw, h * 2);
+        }
+        g.globalAlpha = 46 / 255;
+        g.fillStyle = '#ffffff';
+        g.fillRect(x0, cy - 0.5, x1 - x0, 1);
+      }
+      g.globalAlpha = 1;
+      return;
+    }
+
+    if (this.visualizerStyle === 'wave') {
+      // 波形ライン: 実波形を 512 点に間引いて描く。太い薄線でグロー、細線で芯
+      const amp = bandH * 0.4;
+      const points = 512;
+      const trace = (width: number, color: string, alpha: number): void => {
+        g.globalAlpha = alpha;
+        g.strokeStyle = color;
+        g.lineWidth = width;
+        g.lineJoin = 'round';
+        g.beginPath();
+        for (let i = 0; i < points; i++) {
+          const idx = Math.min(wave.length - 1, Math.floor((i * wave.length) / points));
+          const v = (wave[idx] - 128) / 128;
+          const x = x0 + ((x1 - x0) * i) / (points - 1);
+          const y = cy - v * amp;
+          if (i === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        }
+        g.stroke();
+      };
+      trace(7 * scale, VIZ_WAVE_GLOW, 70 / 255);
+      trace(2.2 * scale, VIZ_WAVE_CORE, 225 / 255);
+      g.globalAlpha = 1;
+      return;
+    }
+
+    // 円形: 土台のリング＋中心から放射するバー（直径約140px @390基準）
+    const cx = W / 2;
+    const baseR = 34 * scale;
+    const vals = groupFreqBins(freq, VISUALIZER_CIRCLE_BARS, sampleRate);
+    g.globalAlpha = 200 / 255;
+    g.strokeStyle = VIZ_CIRCLE_RING;
+    g.lineWidth = 2 * scale;
+    g.beginPath();
+    g.arc(cx, cy, baseR, 0, Math.PI * 2);
+    g.stroke();
+    g.globalAlpha = 215 / 255;
+    g.strokeStyle = VIZ_CIRCLE_BAR;
+    g.lineWidth = 2.6 * scale;
+    for (let i = 0; i < vals.length; i++) {
+      const ang = -Math.PI / 2 + (i / vals.length) * Math.PI * 2;
+      const r0 = baseR + 3 * scale;
+      const r1 = r0 + (5 + vals[i] * 30) * scale;
+      g.beginPath();
+      g.moveTo(cx + r0 * Math.cos(ang), cy + r0 * Math.sin(ang));
+      g.lineTo(cx + r1 * Math.cos(ang), cy + r1 * Math.sin(ang));
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+
   private fit(): void {
     const d = window.devicePixelRatio || 1;
     const w = this.canvas.clientWidth;
@@ -1354,6 +1512,9 @@ export class Game {
         g.fillRect(0, 0, W, H);
       }
     }
+    // ビジュアライザー（判定枠の下の空き領域。ノーツ専用キャンバスより下に描くので、
+    // 下まで落ちてくるノーツが模様の手前に重なる）
+    this.drawVisualizer(g, W, H);
     // 画面の縁の光（FEVER の枠の光に代わるコンボ演出）: 段位が上がるほど
     // 強く・太くなる。上がった瞬間は tierFlash でひときわ光り、ミスで消える
     const edge = TIER_EDGE[tier];

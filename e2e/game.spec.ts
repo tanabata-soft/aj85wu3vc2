@@ -868,3 +868,108 @@ test('フリックノーツはキーボードでもそのまま叩ける', async
     .poll(() => page.evaluate(() => (window as unknown as { __flickSound: boolean }).__flickSound))
     .toBe(true);
 });
+
+test('設定でビジュアライザーのスタイルを切り替えられ、保存される', async ({ page }) => {
+  await page.locator('#btn-open-game').click();
+  await page.locator('#settings-open').click();
+  await expect(page.locator('#settings-dialog')).toBeVisible();
+  // 既定は周波数バー
+  await expect(page.locator('#viz-bars')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#viz-wave')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#viz-mirror')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#viz-circle')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('body')).toHaveAttribute('data-visualizer', 'bars');
+  // 円形へ切り替える
+  await page.locator('#viz-circle').click();
+  await expect(page.locator('#viz-circle')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#viz-bars')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('body')).toHaveAttribute('data-visualizer', 'circle');
+  await page.locator('#settings-close').click();
+  await expect(page.locator('#settings-dialog')).toBeHidden();
+
+  // 開き直しても保存されている（localStorage）
+  await page.goto('/?debug=1');
+  await expect(page.locator('#view-cover')).toBeVisible();
+  await page.locator('#btn-open-game').click();
+  const state = await page.evaluate(() => {
+    const api = (window as unknown as { __pwaTest?: { getGameState?: () => { visualizer: string } } }).__pwaTest;
+    return api?.getGameState?.().visualizer ?? '';
+  });
+  expect(state).toBe('circle');
+  // テスト用の入口からも切り替えられる
+  await page.evaluate(() => {
+    const api = (window as unknown as { __pwaTest?: { setGameState?: (p: Record<string, unknown>) => void } }).__pwaTest;
+    api?.setGameState?.({ visualizer: 'wave' });
+  });
+  await expect(page.locator('body')).toHaveAttribute('data-visualizer', 'wave');
+  await page.locator('#settings-open').click();
+  await expect(page.locator('#viz-wave')).toHaveAttribute('aria-pressed', 'true');
+});
+
+/** 演奏中の Canvas の下部領域（ビジュアライザーの置き場）から、色の条件に合う画素の数を数える。
+ *  kind: 'lavender' = 波形ラインの色（#bdb2e4 系）、'teal' = 周波数バーの色（#2e6f79〜#6fb3bd 系） */
+async function countRegionPixels(
+  page: Page,
+  yFrom: number,
+  yTo: number,
+  kind: 'lavender' | 'teal',
+): Promise<number> {
+  return page.evaluate(
+    ({ yFrom, yTo, kind }) => {
+      const c = document.getElementById('game-canvas') as HTMLCanvasElement;
+      const t = document.createElement('canvas');
+      t.width = c.width;
+      t.height = c.height;
+      const ctx = t.getContext('2d')!;
+      ctx.drawImage(c, 0, 0);
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      const match =
+        kind === 'lavender'
+          ? (r: number, g: number, b: number) => b > 170 && r > 130 && g > 120 && b > r + 10
+          : (r: number, g: number, b: number) => g > r + 25 && b > r + 25 && r < 120 && g < 180;
+      let count = 0;
+      for (let y = Math.floor(c.height * yFrom); y < c.height * yTo; y += 2) {
+        for (let x = Math.floor(c.width * 0.04); x < c.width * 0.96; x += 2) {
+          const i = (y * c.width + x) * 4;
+          if (match(d[i], d[i + 1], d[i + 2])) count++;
+        }
+      }
+      return count;
+    },
+    { yFrom, yTo, kind },
+  );
+}
+
+test('演奏中、判定ラインの下にビジュアライザー（波形ライン）が描かれる', async ({ page }) => {
+  await page.goto('/?debug=1');
+  await expect(page.locator('#view-cover')).toBeVisible();
+  await page.locator('#btn-open-game').click();
+  await page.evaluate(() => {
+    const api = (window as unknown as { __pwaTest?: { setGameState?: (p: Record<string, unknown>) => void } }).__pwaTest;
+    api?.setGameState?.({ visualizer: 'wave' });
+  });
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  // 波形ラインの色（ソフトなラベンダー #bdb2e4 系）が下部領域に出るまで待つ。
+  // 無音でも中心に平らな線が描かれるので、音の有無に依存しない
+  await expect
+    .poll(() => countRegionPixels(page, 0.8, 0.97, 'lavender'), { timeout: 15_000 })
+    .toBeGreaterThan(30);
+});
+
+test('演奏中、判定ラインの下にビジュアライザー（周波数バー）が描かれる', async ({ page }) => {
+  await page.goto('/?debug=1');
+  await expect(page.locator('#view-cover')).toBeVisible();
+  await page.locator('#btn-open-game').click();
+  await page.evaluate(() => {
+    const api = (window as unknown as { __pwaTest?: { setGameState?: (p: Record<string, unknown>) => void } }).__pwaTest;
+    api?.setGameState?.({ visualizer: 'bars' });
+  });
+  await page.locator('#start-button').click();
+  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
+  // 周波数バーの下端色（ティール #2e6f79 系）が下部領域の下寄りに出るまで待つ。
+  // 無音でも最小高さのバーが描かれるので、音の有無に依存しない
+  await expect
+    .poll(() => countRegionPixels(page, 0.9, 0.99, 'teal'), { timeout: 15_000 })
+    .toBeGreaterThan(30);
+});
