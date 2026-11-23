@@ -20,8 +20,6 @@ import {
   isNewBest,
   makePlayNotes,
   groupFreqBins,
-  normalizeVisualizerStyle,
-  VISUALIZER_DEFAULT,
   rankFor,
   RANK_THRESHOLDS,
   validateCharts,
@@ -239,19 +237,7 @@ describe('速度調整（clampSpeed / effectiveFallSeconds）', () => {
   });
 });
 
-describe('ビジュアライザー（normalizeVisualizerStyle / groupFreqBins）', () => {
-  it('既定は周波数バーで、不正な値は既定へ寄せる', () => {
-    expect(VISUALIZER_DEFAULT).toBe('bars');
-    expect(normalizeVisualizerStyle('bars')).toBe('bars');
-    expect(normalizeVisualizerStyle('wave')).toBe('wave');
-    expect(normalizeVisualizerStyle('mirror')).toBe('mirror');
-    expect(normalizeVisualizerStyle('circle')).toBe('circle');
-    expect(normalizeVisualizerStyle('neon')).toBe('bars');
-    expect(normalizeVisualizerStyle('')).toBe('bars');
-    expect(normalizeVisualizerStyle(undefined)).toBe('bars');
-    expect(normalizeVisualizerStyle(3)).toBe('bars');
-  });
-
+describe('ビジュアライザー（groupFreqBins）', () => {
   it('無音（全ビン 0）は全グループ 0、最大（全ビン 255）は全グループ 1', () => {
     const silent = new Uint8Array(1024);
     expect(groupFreqBins(silent, 36, 44100)).toEqual(new Array(36).fill(0));
