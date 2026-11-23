@@ -83,29 +83,16 @@ export function effectiveFallSeconds(fallSeconds: number, speed: number): number
   return fallSeconds / clampSpeed(speed);
 }
 
-// ---- タッチ位置（判定ラインの高さ）の設定（プレイヤー設定。オーナー指示 2026-11-22） ----
-
-/** タッチ位置の選択肢: standard = いままでの判定ライン位置、high = もう少し上 */
-export type TouchPosition = 'standard' | 'high';
-
-/** 既定は standard（いままでの位置） */
-export const TOUCH_POSITION_DEFAULT: TouchPosition = 'standard';
+// ---- 判定ラインの高さ（タッチ位置は「上」固定。オーナー決定 2026-11-23） ----
 
 /**
- * 判定ラインの位置（画面の高さに対する比率）。standard は従来の 0.82。
- * high は画面高さの約8%分上げた 0.74（指が画面下端に寄りすぎない位置で叩ける）
+ * 判定ラインの位置（画面の高さに対する比率）。タッチ位置は「上」で固定する
+ * （旧「標準」の 0.82 から画面高さの約8%分上げた 0.74。指が画面下端に寄り
+ * すぎない位置で叩ける）。以前は設定で 標準／上 を選べたが、オーナー決定
+ * （2026-11-23）で「上」を標準として固定し、設定は撤去した。過去に「標準」で
+ * 保存した端末でも、保存値は読まれないので常にこの位置になる。
  */
-export const TOUCH_POSITION_HIT_Y: Record<TouchPosition, number> = { standard: 0.82, high: 0.74 };
-
-/** 保存値などの外部入力をタッチ位置に直す。不正な値は既定（standard）にする */
-export function normalizeTouchPosition(value: unknown): TouchPosition {
-  return value === 'high' ? 'high' : TOUCH_POSITION_DEFAULT;
-}
-
-/** タッチ位置に対する判定ラインの比率 */
-export function hitYRatio(position: TouchPosition): number {
-  return TOUCH_POSITION_HIT_Y[position];
-}
+export const HIT_Y_RATIO = 0.74;
 
 // ---- 遅延チェック（拍に合わせてタップし、タイミングのずれを実測する） ----
 // 端末やイヤホンの遅延で「タップが拍より遅れる」量を測り、オフセットへ反映する。

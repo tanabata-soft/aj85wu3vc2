@@ -6,7 +6,7 @@ import {
   findHit,
   findKeyboardHit,
   findNearestNote,
-  hitYRatio,
+  HIT_Y_RATIO,
   LIFE_CAUTION,
   LIFE_DANGER,
   LIFE_DELTAS,
@@ -14,7 +14,6 @@ import {
   applyLifeDelta,
   isLifeGameOver,
   lifeZone,
-  normalizeTouchPosition,
   LATENCY_DROP_COUNT,
   LATENCY_TAP_COUNT,
   latencyStats,
@@ -237,20 +236,9 @@ describe('速度調整（clampSpeed / effectiveFallSeconds）', () => {
   });
 });
 
-describe('タッチ位置（normalizeTouchPosition / hitYRatio）', () => {
-  it('判定ラインの比率は standard = 0.82（従来位置）、high = 0.74（約8%上）', () => {
-    expect(hitYRatio('standard')).toBe(0.82);
-    expect(hitYRatio('high')).toBe(0.74);
-    expect(hitYRatio('standard') - hitYRatio('high')).toBeCloseTo(0.08);
-  });
-
-  it('正規化は high だけを通し、それ以外は既定の standard', () => {
-    expect(normalizeTouchPosition('high')).toBe('high');
-    expect(normalizeTouchPosition('standard')).toBe('standard');
-    expect(normalizeTouchPosition('up')).toBe('standard');
-    expect(normalizeTouchPosition(undefined)).toBe('standard');
-    expect(normalizeTouchPosition(null)).toBe('standard');
-    expect(normalizeTouchPosition(1)).toBe('standard');
+describe('判定ラインの高さ（HIT_Y_RATIO）', () => {
+  it('タッチ位置は「上」固定で、比率は 0.74（旧「標準」0.82 の約8%上）', () => {
+    expect(HIT_Y_RATIO).toBe(0.74);
   });
 });
 
