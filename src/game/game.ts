@@ -174,13 +174,23 @@ const RING_LIFE = 0.32;
 const POP_LIFE = 0.18;
 const RIPPLE_LIFE = 0.38;
 const JUDGE_LIFE = 0.55;
-/** フリックノーツの中でシェブロンが並ぶ間隔 (px) */
-const FLICK_CHEVRON_GAP_PX = 11;
-/** フリックノーツの中をシェブロンが上へ流れる速さ (px/秒)。間隔1つ分を 0.25 秒で進む */
-const FLICK_CHEVRON_FLOW_PX_PER_SEC = 44;
-/** フリックノーツの輪郭色（ほぼ黒に近い紺）とシェブロンの色（水色）。見た目改善の案A（2026-11-23）:
- * 白枠＋白シェブロンはレーン色に溶けて見にくいというオーナー指摘への対処 */
-const FLICK_OUTLINE_COLOR = '#0a1030';
+/** フリック表示は大きなブロック矢印（↑）だけ（オーナー決定 2026-11-23、確定仕様）:
+ * 四角いノーツ本体（レーン色の塗り＋枠＋シェブロン）は描かず、矢印を従来ノーツの
+ * 中心位置に置く。塗りはそのレーンの色、縁取りは濃紺。経緯: 案A（濃紺太枠＋水色
+ * シェブロン）でも「まだ見にくい」とのオーナー指摘を受け、ノーツの上に矢印を
+ * 飛び出させる案のプレビュー（マゼンタ／オレンジ／白）を経て、オーナーの
+ * 「四角いのなしで矢印だけならどう？」で矢印だけ案に決まり、塗り＝レーン色・
+ * 縁取り＝濃紺で確定した */
+/** 矢印の高さ (px) */
+const FLICK_ARROW_HEIGHT = 60;
+/** 矢印の縁取り色（ほぼ黒に近い紺） */
+const FLICK_ARROW_OUTLINE_COLOR = '#0a1030';
+/** 矢印の縁取りの太さ (px)。脈動の位相によらず画面上でこの太さに保つ */
+const FLICK_ARROW_OUTLINE_WIDTH = 5;
+/** 矢印の脈動: 周期（秒）と最大拡縮率（1.0〜この値の間を sin で往復する） */
+const FLICK_ARROW_PULSE_PERIOD_SEC = 0.85;
+const FLICK_ARROW_PULSE_MAX = 1.15;
+/** フリック成功時に飛ぶシェブロンの色（水色。演出は従来どおり） */
 const FLICK_CHEVRON_COLOR = '#3fd9ff';
 /** フリック成功時に飛ぶシェブロンの寿命（秒）と上昇距離 (px) */
 const FLICK_CHEV_LIFE = 0.35;
@@ -1455,53 +1465,48 @@ export class Game {
     for (const n of this.notes) {
       if (n.state !== 0 || n.holdMs > 0) continue;
       const y = hy - ((n.timeMs - nowMs) / 1000 / fall) * hy;
-      if (y < -30 || y > H + 30) continue;
-      // フリックノーツは通常ノーツより一回り大きく描く（見た目改善の案A、2026-11-23）
-      const nx = n.lane * lw + (n.flick ? 5 : 8);
-      const nw = lw - (n.flick ? 10 : 16);
-      const nh = n.flick ? 34 : 28;
-      const nr = n.flick ? 9 : 8;
+      // フリック矢印は高さ 60px を脈動させるため、通常ノーツより広い余白で間引く
+      if (n.flick ? y < -80 || y > H + 80 : y < -30 || y > H + 30) continue;
+      if (n.flick) {
+        // フリックの印は大きなブロック矢印（↑）だけ（オーナー決定 2026-11-23、確定仕様）。
+        // 四角いノーツ本体は描かず、矢印を従来ノーツの中心位置に置く。
+        // 塗りはそのレーンの色、縁取りは濃紺。矢印の中心を支点に脈動させる
+        const cx = n.lane * lw + lw / 2;
+        const pulse =
+          1 +
+          (FLICK_ARROW_PULSE_MAX - 1) *
+            (0.5 + 0.5 * Math.sin((frameAt / FLICK_ARROW_PULSE_PERIOD_SEC) * Math.PI * 2));
+        const ah = FLICK_ARROW_HEIGHT;
+        const aw = lw - 10;
+        gn.save();
+        gn.translate(cx, y);
+        gn.scale(pulse, pulse);
+        gn.beginPath();
+        gn.moveTo(0, -ah / 2);
+        gn.lineTo(aw / 2, ah * 0.05);
+        gn.lineTo(aw * 0.22, ah * 0.05);
+        gn.lineTo(aw * 0.22, ah / 2);
+        gn.lineTo(-aw * 0.22, ah / 2);
+        gn.lineTo(-aw * 0.22, ah * 0.05);
+        gn.lineTo(-aw / 2, ah * 0.05);
+        gn.closePath();
+        gn.fillStyle = LANE_COLORS[n.lane];
+        gn.fill();
+        gn.strokeStyle = FLICK_ARROW_OUTLINE_COLOR;
+        // 縁取りの太さが脈動で拡縮されないよう、拡大率で割って画面上 5px 一定にする
+        gn.lineWidth = FLICK_ARROW_OUTLINE_WIDTH / pulse;
+        gn.lineJoin = 'round';
+        gn.stroke();
+        gn.restore();
+        continue;
+      }
+      const nx = n.lane * lw + 8;
+      const nw = lw - 16;
+      const nh = 28;
       gn.fillStyle = LANE_COLORS[n.lane];
       gn.beginPath();
-      gn.roundRect(nx, y - nh / 2, nw, nh, nr);
+      gn.roundRect(nx, y - nh / 2, nw, nh, 8);
       gn.fill();
-      if (n.flick) {
-        // フリックノーツの目印: 濃色（ほぼ黒に近い紺）の太い輪郭＋ノーツの中で
-        // 上へ流れ続ける太い水色シェブロン（∧）。白枠＋白シェブロンではレーン色に
-        // 溶けて見にくいというオーナー指摘（「フリック音符がみにくい。白枠だからか？？」）
-        // を受けての見た目改善・案A（2026-11-23）。上へ流れ続ける動き自体は
-        // オーナー決定 2026-11-22 の A 案のまま変えていない。
-        // シェブロンはノーツの形でクリップし、上下端付近では薄くして、
-        // 循環して流れ続ける見え方にする。位相は描画時刻（frameAt）から決める
-        const cx = n.lane * lw + lw / 2;
-        gn.strokeStyle = FLICK_OUTLINE_COLOR;
-        gn.lineWidth = 5;
-        gn.beginPath();
-        gn.roundRect(nx + 3, y - nh / 2 + 3, nw - 6, nh - 6, 7);
-        gn.stroke();
-        gn.save();
-        gn.beginPath();
-        gn.roundRect(nx, y - nh / 2, nw, nh, nr);
-        gn.clip();
-        const flow = (frameAt * FLICK_CHEVRON_FLOW_PX_PER_SEC) % FLICK_CHEVRON_GAP_PX;
-        gn.strokeStyle = FLICK_CHEVRON_COLOR;
-        gn.lineWidth = 4.5;
-        gn.lineJoin = 'round';
-        for (let k = 0; k < 4; k++) {
-          const cy = y + 18 - flow - k * FLICK_CHEVRON_GAP_PX;
-          // 中心で最も濃く、上下端へ向けて消える（端で出入りが目立たないように）
-          const fade = 1 - Math.min(1, Math.abs(cy - y) / 18);
-          if (fade <= 0) continue;
-          gn.globalAlpha = fade;
-          gn.beginPath();
-          gn.moveTo(cx - 11, cy + 6);
-          gn.lineTo(cx, cy - 6);
-          gn.lineTo(cx + 11, cy + 6);
-          gn.stroke();
-        }
-        gn.restore();
-        gn.globalAlpha = 1;
-      }
     }
 
     // ---- ヒット演出（時間ベースで更新） ----
@@ -1577,7 +1582,7 @@ export class Game {
       const rise = FLICK_CHEV_RISE_PX * (1 - (1 - k) * (1 - k));
       const s = 11 + 3 * k;
       gn.globalAlpha = 0.95 * (1 - k);
-      // 成功シェブロンもノーツ側と同じ水色にそろえる（見た目改善の案A、2026-11-23）
+      // 成功シェブロンの色は水色のまま維持（見た目改善の案A、2026-11-23。演出自体は従来どおり）
       gn.strokeStyle = FLICK_CHEVRON_COLOR;
       gn.lineWidth = 4;
       gn.lineJoin = 'round';
