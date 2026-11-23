@@ -19,6 +19,9 @@ import {
   latencyStats,
   isNewBest,
   makePlayNotes,
+  groupFreqBins,
+  normalizeVisualizerStyle,
+  VISUALIZER_DEFAULT,
   rankFor,
   RANK_THRESHOLDS,
   validateCharts,
@@ -233,6 +236,41 @@ describe('速度調整（clampSpeed / effectiveFallSeconds）', () => {
     expect(effectiveFallSeconds(2.0, 2.0)).toBe(1.0);
     expect(effectiveFallSeconds(1.6, 0.8)).toBe(2.0);
     expect(effectiveFallSeconds(1.3, 1.3)).toBe(1.0);
+  });
+});
+
+describe('ビジュアライザー（normalizeVisualizerStyle / groupFreqBins）', () => {
+  it('既定は周波数バーで、不正な値は既定へ寄せる', () => {
+    expect(VISUALIZER_DEFAULT).toBe('bars');
+    expect(normalizeVisualizerStyle('bars')).toBe('bars');
+    expect(normalizeVisualizerStyle('wave')).toBe('wave');
+    expect(normalizeVisualizerStyle('mirror')).toBe('mirror');
+    expect(normalizeVisualizerStyle('circle')).toBe('circle');
+    expect(normalizeVisualizerStyle('neon')).toBe('bars');
+    expect(normalizeVisualizerStyle('')).toBe('bars');
+    expect(normalizeVisualizerStyle(undefined)).toBe('bars');
+    expect(normalizeVisualizerStyle(3)).toBe('bars');
+  });
+
+  it('無音（全ビン 0）は全グループ 0、最大（全ビン 255）は全グループ 1', () => {
+    const silent = new Uint8Array(1024);
+    expect(groupFreqBins(silent, 36, 44100)).toEqual(new Array(36).fill(0));
+    const loud = new Uint8Array(1024).fill(255);
+    expect(groupFreqBins(loud, 36, 44100)).toEqual(new Array(36).fill(1));
+    expect(groupFreqBins(loud, 48, 48000)).toEqual(new Array(48).fill(1));
+  });
+
+  it('低域だけ鳴らすと先頭のグループだけが立ち、高域だけだと後ろが立つ', () => {
+    const low = new Uint8Array(1024);
+    low.fill(255, 1, 8); // 約43〜345Hz
+    const lowVals = groupFreqBins(low, 36, 44100);
+    expect(lowVals[0]).toBeGreaterThan(0);
+    expect(lowVals[35]).toBe(0);
+    const high = new Uint8Array(1024);
+    high.fill(255, 600, 700); // 約12.9k〜15.1kHz（上限 13kHz の内側が効く）
+    const highVals = groupFreqBins(high, 36, 44100);
+    expect(highVals[0]).toBe(0);
+    expect(highVals[35]).toBeGreaterThan(0);
   });
 });
 

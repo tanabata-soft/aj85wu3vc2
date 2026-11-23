@@ -94,6 +94,55 @@ export function effectiveFallSeconds(fallSeconds: number, speed: number): number
  */
 export const HIT_Y_RATIO = 0.74;
 
+// ---- オーディオビジュアライザー（プレイヤー設定） ----
+// タッチ位置を「上」に固定したことで空いたプレイ画面の下部スペースに、再生中の
+// 曲から取った周波数・波形を描く（オーナー決定 2026-11-23）。スタイルは固定では
+// なく設定で切り替えられる（同じ日の決定）。色と明るさは控えめにして、譜面から
+// 目が離れないようにする。描画そのものは game.ts、データ取得は audio.ts の
+// 曲専用アナライザが担い、ここにはスタイルの定義と純粋な集計だけを置く。
+
+/** ビジュアライザーのスタイル（設定で切り替え、保存される） */
+export type VisualizerStyle = 'bars' | 'wave' | 'mirror' | 'circle';
+export const VISUALIZER_STYLES: readonly VisualizerStyle[] = ['bars', 'wave', 'mirror', 'circle'];
+/** 既定のスタイル（周波数バー） */
+export const VISUALIZER_DEFAULT: VisualizerStyle = 'bars';
+/** 周波数バー／ミラーバーの本数 */
+export const VISUALIZER_FREQ_BARS = 36;
+/** 円形スタイルの放射バーの本数 */
+export const VISUALIZER_CIRCLE_BARS = 48;
+/** 周波数を対数グループ化する範囲（Hz） */
+export const VISUALIZER_FREQ_MIN_HZ = 40;
+export const VISUALIZER_FREQ_MAX_HZ = 13000;
+
+/** 保存値などの未知の値をスタイルへ寄せる。不正な値は既定（周波数バー）にする */
+export function normalizeVisualizerStyle(value: unknown): VisualizerStyle {
+  return typeof value === 'string' && (VISUALIZER_STYLES as readonly string[]).includes(value)
+    ? (value as VisualizerStyle)
+    : VISUALIZER_DEFAULT;
+}
+
+/**
+ * 周波数データ（AnalyserNode の getByteFrequencyData、0..255）を対数スケールで
+ * groups 本に平均化し、0..1 の配列で返す。プレビュー（render_visualizer.py の
+ * grouped）と同方式：40Hz〜13kHz を対数で等分し、各帯域のビンを平均する。
+ */
+export function groupFreqBins(freq: ArrayLike<number>, groups: number, sampleRate: number): number[] {
+  const binHz = sampleRate / 2 / Math.max(1, freq.length - 1);
+  const logLo = Math.log(VISUALIZER_FREQ_MIN_HZ);
+  const logHi = Math.log(VISUALIZER_FREQ_MAX_HZ);
+  const out: number[] = [];
+  for (let i = 0; i < groups; i++) {
+    const loHz = Math.exp(logLo + ((logHi - logLo) * i) / groups);
+    const hiHz = Math.exp(logLo + ((logHi - logLo) * (i + 1)) / groups);
+    const lo = Math.max(1, Math.floor(loHz / binHz));
+    const hi = Math.min(freq.length, Math.max(lo + 1, Math.floor(hiHz / binHz)));
+    let sum = 0;
+    for (let b = lo; b < hi; b++) sum += freq[b];
+    out.push(hi > lo ? sum / (hi - lo) / 255 : 0);
+  }
+  return out;
+}
+
 // ---- 遅延チェック（拍に合わせてタップし、タイミングのずれを実測する） ----
 // 端末やイヤホンの遅延で「タップが拍より遅れる」量を測り、オフセットへ反映する。
 // 符号の約束: ズレ = タップ時刻 − 最寄りの拍の時刻（+ は拍より遅れてタップした）。
