@@ -94,32 +94,20 @@ export function effectiveFallSeconds(fallSeconds: number, speed: number): number
  */
 export const HIT_Y_RATIO = 0.74;
 
-// ---- オーディオビジュアライザー（プレイヤー設定） ----
+// ---- オーディオビジュアライザー（周波数バー固定） ----
 // タッチ位置を「上」に固定したことで空いたプレイ画面の下部スペースに、再生中の
-// 曲から取った周波数・波形を描く（オーナー決定 2026-11-23）。スタイルは固定では
-// なく設定で切り替えられる（同じ日の決定）。色と明るさは控えめにして、譜面から
-// 目が離れないようにする。描画そのものは game.ts、データ取得は audio.ts の
-// 曲専用アナライザが担い、ここにはスタイルの定義と純粋な集計だけを置く。
+// 曲から取った周波数を描く（オーナー決定 2026-11-23）。当初はスタイル4種を
+// 設定で切り替えられる形で入れたが、同日の実機確認を経たオーナー決定で
+// 周波数バー固定に変更し、設定は撤去した（過去に保存したスタイル値は読まれない）。
+// 色と明るさは控えめにして、譜面から目が離れないようにする。描画そのものは
+// game.ts、データ取得は audio.ts の曲専用アナライザが担い、ここには純粋な
+// 集計だけを置く。
 
-/** ビジュアライザーのスタイル（設定で切り替え、保存される） */
-export type VisualizerStyle = 'bars' | 'wave' | 'mirror' | 'circle';
-export const VISUALIZER_STYLES: readonly VisualizerStyle[] = ['bars', 'wave', 'mirror', 'circle'];
-/** 既定のスタイル（周波数バー） */
-export const VISUALIZER_DEFAULT: VisualizerStyle = 'bars';
-/** 周波数バー／ミラーバーの本数 */
+/** 周波数バーの本数 */
 export const VISUALIZER_FREQ_BARS = 36;
-/** 円形スタイルの放射バーの本数 */
-export const VISUALIZER_CIRCLE_BARS = 48;
 /** 周波数を対数グループ化する範囲（Hz） */
 export const VISUALIZER_FREQ_MIN_HZ = 40;
 export const VISUALIZER_FREQ_MAX_HZ = 13000;
-
-/** 保存値などの未知の値をスタイルへ寄せる。不正な値は既定（周波数バー）にする */
-export function normalizeVisualizerStyle(value: unknown): VisualizerStyle {
-  return typeof value === 'string' && (VISUALIZER_STYLES as readonly string[]).includes(value)
-    ? (value as VisualizerStyle)
-    : VISUALIZER_DEFAULT;
-}
 
 /**
  * 周波数データ（AnalyserNode の getByteFrequencyData、0..255）を対数スケールで

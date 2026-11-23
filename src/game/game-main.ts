@@ -10,17 +10,14 @@ import {
 DIFFICULTIES,
 SPEED_DEFAULT,
 SPEED_STEP,
-VISUALIZER_STYLES,
 clampOffset,
 clampSpeed,
 isFullCombo,
 isNewBest,
-normalizeVisualizerStyle,
 type ComboAppearance,
 type Difficulty,
 type LatencyStats,
 type SongId,
-type VisualizerStyle,
 } from './logic';
 import { LatencyCheck } from './latency';
 import { SONGS, songById, type SongEntry } from './charts';
@@ -59,8 +56,8 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   let offsetMs = clampOffset(load<number>('offset', 0));
   // 音符の落下速度の倍率（プレイヤー設定。×1.0 がいままでの速度）
   let speedMul = clampSpeed(load<number>('speed', SPEED_DEFAULT));
-  // ビジュアライザーのスタイル（プレイヤー設定。既定は周波数バー）
-  let visualizerStyle: VisualizerStyle = normalizeVisualizerStyle(load<string>('visualizer', 'bars'));
+  // ビジュアライザーは周波数バー固定で設定はない（オーナー決定 2026-11-23）。
+  // 過去に保存したスタイル値（storage キー visualizer）は読まれない。
   // 効果音と歌詞表示のオンオフは廃止した（オーナー指示 2026-11-20）。どちらも常にオン。
   // 過去にオフで保存した端末でも戻せるよう、起動時に効果音をオンへ上書きしておく
   setSound(true);
@@ -354,15 +351,11 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     }
     $('offset-value').textContent = `${offsetMs > 0 ? '+' : ''}${offsetMs}ms`;
     $('speed-value').textContent = `×${speedMul.toFixed(1)}`;
-    for (const s of VISUALIZER_STYLES) {
-      $(`viz-${s}`).setAttribute('aria-pressed', String(visualizerStyle === s));
-    }
     renderToggle('vibrate-button', isVibrateOn());
     setData('song', selectedSong);
     setData('difficulty', selectedDiff);
     setData('offset', offsetMs);
     setData('speed', speedMul);
-    setData('visualizer', visualizerStyle);
     setData('sound', isSoundOn() ? 'on' : 'off');
     setData('vibrate', isVibrateOn() ? 'on' : 'off');
     setData('lyrics', 'on');
@@ -390,16 +383,6 @@ function initGameMode(): { enter: () => void; exit: () => void } {
   }
   $('speed-minus').addEventListener('click', () => setSpeed(speedMul - SPEED_STEP));
   $('speed-plus').addEventListener('click', () => setSpeed(speedMul + SPEED_STEP));
-  function setVisualizer(next: VisualizerStyle): void {
-    if (next === visualizerStyle) return;
-    visualizerStyle = next;
-    save('visualizer', visualizerStyle);
-    renderMenu();
-    playUiClick();
-  }
-  for (const s of VISUALIZER_STYLES) {
-    $(`viz-${s}`).addEventListener('click', () => setVisualizer(s));
-  }
   $('vibrate-button').addEventListener('click', () => {
     setVibrate(!isVibrateOn());
     renderMenu();
@@ -690,7 +673,7 @@ function initGameMode(): { enter: () => void; exit: () => void } {
     try {
       show('game');
       // オートプレイはデバッグモードがオンのときだけ効く
-      await game.start(entry, selectedDiff, offsetMs, isDebug() && autoplayOn, speedMul, visualizerStyle);
+      await game.start(entry, selectedDiff, offsetMs, isDebug() && autoplayOn, speedMul);
       status.textContent = '';
     } catch {
       show('menu');
@@ -790,7 +773,6 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       difficulty: selectedDiff,
       offset: offsetMs,
       speed: speedMul,
-      visualizer: visualizerStyle,
       playing: game.isPlaying,
       life: game.lifeValue,
       songMs: game.songPositionMs(),
@@ -812,7 +794,6 @@ function initGameMode(): { enter: () => void; exit: () => void } {
       if (typeof patch.difficulty === 'string' && patch.difficulty in DIFFICULTIES) selectedDiff = patch.difficulty as Difficulty;
       if (typeof patch.offset === 'number') offsetMs = clampOffset(patch.offset);
       if (typeof patch.speed === 'number') speedMul = clampSpeed(patch.speed);
-      if (typeof patch.visualizer === 'string') visualizerStyle = normalizeVisualizerStyle(patch.visualizer);
       if (typeof patch.debugMode === 'boolean') {
         // デバッグモードは CD 側と共有の旗（バージョン表示の5回タップと同じもの）
         setDebug(patch.debugMode);
