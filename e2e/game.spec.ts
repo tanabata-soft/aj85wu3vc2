@@ -141,10 +141,19 @@ test('遅延チェックを途中で閉じたらオフセットは変わらな�
   await expect(page.locator('#offset-value')).toHaveText('+10ms');
 });
 
-test('タッチ位置を「上」に変えると判定ラインが上がり、設定が保存される', async ({ page }) => {
+test('判定ラインはタッチ位置「上」固定（H×0.74）で、設定にタッチ位置の項目はない', async ({ page }) => {
   await page.goto('/?debug=1');
   await expect(page.locator('#view-cover')).toBeVisible();
   await page.locator('#btn-open-game').click();
+
+  // 設定ダイアログにタッチ位置の項目（標準／上の2択）はもう無い（タッチ位置を
+  // 「上」に固定したオーナー決定 2026-11-23 で撤去）
+  await page.locator('#settings-open').click();
+  await expect(page.locator('#settings-dialog')).toBeVisible();
+  await expect(page.locator('#touch-standard')).toHaveCount(0);
+  await expect(page.locator('#touch-high')).toHaveCount(0);
+  await page.locator('#settings-close').click();
+  await expect(page.locator('#settings-dialog')).toBeHidden();
 
   // 判定ラインの位置: Canvas の中で「ほぼ白い横帯」が最も広い行の高さ比率を測る。
   // 判定ラインは幅いっぱいに引かれる白線なので、その行が比率として返る。
@@ -194,47 +203,12 @@ test('タッチ位置を「上」に変えると判定ラインが上がり、�
     return ratio;
   };
 
-  // 既定（標準）では判定ラインは H×0.82
+  // 判定ラインは常に「上」の位置（H×0.74）で、設定で変える手段はない
   await page.locator('#start-button').click();
   await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
-  const standard = await lineRatio();
-  expect(standard).toBeGreaterThan(0.79);
-  expect(standard).toBeLessThan(0.85);
-
-  // 中断してメニューに戻り、設定で「上」に切り替える
-  await page.locator('#game-canvas').dispatchEvent('pointerdown', { clientX: 30, clientY: 29 });
-  await expect(page.locator('#pause-screen')).toBeVisible();
-  await page.locator('#pause-abort-button').click();
-  await expect(page.locator('#menu-screen')).toBeVisible();
-  await page.locator('#settings-open').click();
-  await expect(page.locator('#settings-dialog')).toBeVisible();
-  await expect(page.locator('body')).toHaveAttribute('data-touch-position', 'standard');
-  await expect(page.locator('#touch-standard')).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('#touch-high').click();
-  await expect(page.locator('body')).toHaveAttribute('data-touch-position', 'high');
-  await expect(page.locator('#touch-high')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#touch-standard')).toHaveAttribute('aria-pressed', 'false');
-  await page.locator('#settings-close').click();
-  await expect(page.locator('#settings-dialog')).toBeHidden();
-
-  // 「上」では判定ラインが H×0.74 に上がる
-  await page.locator('#start-button').click();
-  await expect(page.locator('body')).toHaveAttribute('data-game', 'playing', { timeout: 30_000 });
-  const high = await lineRatio();
-  expect(high).toBeGreaterThan(0.71);
-  expect(high).toBeLessThan(0.77);
-  expect(high).toBeLessThan(standard - 0.05);
-
-  // 保存されている: 再読み込みしても「上」のまま
-  await page.locator('#game-canvas').dispatchEvent('pointerdown', { clientX: 30, clientY: 29 });
-  await expect(page.locator('#pause-screen')).toBeVisible();
-  await page.locator('#pause-abort-button').click();
-  await page.reload();
-  await expect(page.locator('#view-cover')).toBeVisible();
-  await page.locator('#btn-open-game').click();
-  await page.locator('#settings-open').click();
-  await expect(page.locator('body')).toHaveAttribute('data-touch-position', 'high');
-  await expect(page.locator('#touch-high')).toHaveAttribute('aria-pressed', 'true');
+  const ratio = await lineRatio();
+  expect(ratio).toBeGreaterThan(0.71);
+  expect(ratio).toBeLessThan(0.77);
 });
 
 test('選択を変えると確認音が鳴る', async ({ page }) => {

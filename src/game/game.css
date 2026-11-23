@@ -636,26 +636,6 @@
   color: var(--gold);
 }
 
-/* タッチ位置の2択（標準／上）。選択中はトグルと同じ見た目で光らせる */
-#view-game .touch-row {
-  display: flex;
-  gap: 12px;
-}
-
-#view-game .touch-row button {
-  flex: 1;
-  min-height: 48px;
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-#view-game .touch-row button[aria-pressed='true'] {
-  border-color: var(--primary);
-  background: linear-gradient(120deg, rgb(var(--song-accent-rgb) / 0.35), rgb(var(--song-accent-rgb) / 0.18));
-  color: var(--primary-text);
-}
-
 /* ゲーム画面（全画面 Canvas） */#view-game #game-screen {
   position: fixed;
   inset: 0;

@@ -10,8 +10,8 @@ import {
   HOLD_COMPLETE_BONUS,
   HOLD_TICK_SCORE,
   LANE_COLORS,
+  HIT_Y_RATIO,
   SPEED_DEFAULT,
-  TOUCH_POSITION_DEFAULT,
   advanceHold,
   beginHold,
   clampSpeed,
@@ -23,7 +23,6 @@ import {
   findHit,
   findKeyboardHit,
   findNearestNote,
-  hitYRatio,
   isComboShow,
   LIFE_MAX,
   applyLifeDelta,
@@ -31,7 +30,6 @@ import {
   lifeZone,
   lyricIndexAt,
   makePlayNotes,
-  normalizeTouchPosition,
   rankFor,
   accuracy,
   releaseHold,
@@ -48,7 +46,6 @@ import {
   type JudgementCounts,
   type PlayNote,
   type Rank,
-  type TouchPosition,
 } from './logic';
 import type { SongEntry } from './charts';
 import { COMBO_PATTERNS, COMBO_SHOW_CONFIG, comboPatternDef } from './presentation';
@@ -83,8 +80,8 @@ export interface GameCallbacks {
   onLyric(index: number): void;
 }
 
-// 判定ラインの高さはタッチ位置設定（logic.ts の hitYRatio）で決まる:
-// standard = H×0.82（従来位置）、high = H×0.74。Game.hitY() を参照
+// 判定ラインの高さは H×0.74 で固定（タッチ位置「上」。logic.ts の HIT_Y_RATIO）。
+// Game.hitY() を参照
 const READY_SECONDS = 2;
 /**
  * 左上の中断ボタン（描画とタップ判定で共有する）。v1.4.9 の上部 UI 見直し
@@ -340,12 +337,9 @@ export class Game {
   private pointerGestures = new Map<number, { startY: number; startWall: number; flicked: boolean }>();
   /** 音符の落下速度の倍率（プレイヤー設定。start で受け取る） */
   private speed = SPEED_DEFAULT;
-  /** タッチ位置（判定ラインの高さ。プレイヤー設定。start で受け取る） */
-  private touchPosition: TouchPosition = TOUCH_POSITION_DEFAULT;
-
-  /** 判定ラインの y 座標（px）。タッチ位置設定に追随する */
+  /** 判定ラインの y 座標（px）。タッチ位置「上」固定（H×0.74） */
   private hitY(): number {
-    return this.height * hitYRatio(this.touchPosition);
+    return this.height * HIT_Y_RATIO;
   }
   /** 押さえ中のキー（レーン） */
   private keyLanes = new Set<number>();
@@ -565,14 +559,13 @@ export class Game {
     return (nowSeconds() - this.startAt) * 1000;
   }
 
-  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率、touchPosition は判定ラインの高さ（どちらもプレイヤー設定） */
+  /** 曲を読み込んで演奏を始める。読み込み済みなら即座に始まる。autoplay は設定のデバッグモード配下のオートプレイ。speed は音符の落下速度の倍率（プレイヤー設定） */
   async start(
     entry: SongEntry,
     difficulty: Difficulty,
     offsetMs: number,
     autoplay = false,
     speed = SPEED_DEFAULT,
-    touchPosition: TouchPosition = TOUCH_POSITION_DEFAULT,
   ): Promise<void> {
     // スタート操作のジェスチャの中で呼ばれる前提で、まず音声を unlock する
     unlockAudio();
@@ -595,7 +588,6 @@ export class Game {
     this.offsetMs = offsetMs;
     this.autoplay = autoplay;
     this.speed = clampSpeed(speed);
-    this.touchPosition = normalizeTouchPosition(touchPosition);
     setData('autoplay', autoplay ? 'on' : 'off');
     this.notes = makePlayNotes(entry.data.charts[difficulty], offsetMs);
     this.counts = emptyCounts();
@@ -751,7 +743,7 @@ export class Game {
 
   /**
    * 確認カードの「はじめからやりなおす」（オーナー指示 2026-11-22）。確認は挟まず、
-   * カードを閉じて同じ曲・難易度・設定（オフセット／オートプレイ／速度／タッチ位置）の
+   * カードを閉じて同じ曲・難易度・設定（オフセット／オートプレイ／速度）の
    * まま start し直す。スコア・コンボ・ライフ・判定カウントは start 側でリセットされ、
    * 曲は頭から鳴る
    */
@@ -759,7 +751,7 @@ export class Game {
     if (!this.playing || !this.paused || this.pausePhase !== 'confirm' || !this.entry) return;
     const entry = this.entry;
     this.cb.onPause(false);
-    void this.start(entry, this.difficulty, this.offsetMs, this.autoplay, this.speed, this.touchPosition);
+    void this.start(entry, this.difficulty, this.offsetMs, this.autoplay, this.speed);
   }
 
   /** 確認カードの「つづける」。カードを閉じ、READY（1秒）をはさんで再開する */
@@ -1375,7 +1367,7 @@ export class Game {
       g.strokeRect(edge.width / 2 + 1, edge.width / 2 + 1, W - edge.width - 2, H - edge.width - 2);
     }
     const lw = W / 4;
-    const hy = H * hitYRatio(this.touchPosition);
+    const hy = H * HIT_Y_RATIO;
     // このフレームの演出段階（コンボのみで決まる）。フラッシュとコンボ表示に使う
     const frameFx = tierFx(tier);
     for (let i = 0; i < 4; i++) {
