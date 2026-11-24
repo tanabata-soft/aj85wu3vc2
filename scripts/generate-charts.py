@@ -282,6 +282,7 @@ SONGS = {
         "chorus_bonus": 0.5,
         "flick": True,
         "flick_budget": {'easy': 11, 'normal': 17, 'hard': 22},
+        "ballad": False,
     },
     "saki": {
         "title": "頂点のその先へ",
@@ -292,6 +293,7 @@ SONGS = {
         "chorus_bonus": 0.5,
         "flick": True,
         "flick_budget": {'easy': 12, 'normal': 17, 'hard': 23},
+        "ballad": False,
     },
     "kizu": {
         "title": "きずだらけのまま",
